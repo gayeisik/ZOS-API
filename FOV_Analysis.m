@@ -2,17 +2,19 @@ clc;
 clear;
 close all;
 
-%% Select folder (the folder where EFL_Batch_Analysis.m saved its results)
-folderPath = uigetdir(pwd, 'Select the folder containing EFL_Results.xlsx');
+%% Select folder (the Zemax folder that was used in EFL_Batch_Analysis.m)
+folderPath = uigetdir(pwd, 'Select Zemax folder');
 
 if isequal(folderPath, 0)
     return;
 end
 
-eflFile = fullfile(folderPath, 'EFL_Results.xlsx');
+% EFL results are in the "EFL ANALİZİ" subfolder (char(304) = 'İ')
+eflFolder = fullfile(folderPath, ['EFL ANAL' char(304) 'Z' char(304)]);
+eflFile = fullfile(eflFolder, 'EFL_Results.xlsx');
 
 if ~isfile(eflFile)
-    error('EFL_Results.xlsx not found in:\n%s\nRun EFL_Batch_Analysis.m first.', folderPath);
+    error('EFL_Results.xlsx not found in:\n%s\nRun EFL_Batch_Analysis.m first.', eflFolder);
 end
 
 %% Read EFL results

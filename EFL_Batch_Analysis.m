@@ -114,6 +114,13 @@ fprintf('Std EFL:    %.4f mm\n', statValues(4));
 fprintf('Min EFL:    %.4f mm\n', statValues(5));
 fprintf('Max EFL:    %.4f mm\n', statValues(6));
 
+%% Output folder: "EFL ANALİZİ" (char(304) = 'İ', avoids .m file encoding issues)
+outFolder = fullfile(folderPath, ['EFL ANAL' char(304) 'Z' char(304)]);
+
+if ~isfolder(outFolder)
+    mkdir(outFolder);
+end
+
 %% Histogram: EFL distribution
 fig = figure('Name', 'EFL Distribution', 'Color', 'w');
 
@@ -125,7 +132,7 @@ title(sprintf('EFL Distribution - %d files', numel(eflValid)));
 grid on;
 
 % Save histogram as image to the selected folder
-imageFile = fullfile(folderPath, 'EFL_Histogram.png');
+imageFile = fullfile(outFolder, 'EFL_Histogram.png');
 try
     exportgraphics(fig, imageFile, 'Resolution', 300);   % R2020a+
 catch
@@ -133,7 +140,7 @@ catch
 end
 
 %% Export Excel
-outputFile = fullfile(folderPath, 'EFL_Results.xlsx');
+outputFile = fullfile(outFolder, 'EFL_Results.xlsx');
 
 % Remove old file so stale rows/sheets are not kept
 if isfile(outputFile)
