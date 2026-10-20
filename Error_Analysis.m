@@ -73,7 +73,9 @@ end
 % error (%) = (actual - target) / target * 100   (signed: + larger, - smaller)
 pctError = @(x, t) (x - t) ./ abs(t) * 100;
 
-EFL_err_pct  = pctError(EFL_mm, targetEFL);
+% EFL is compared by magnitude so the sign means the same for negative EFL:
+% + : |EFL| longer than target, - : |EFL| shorter than target
+EFL_err_pct  = pctError(abs(EFL_mm), abs(targetEFL));
 HFOV_err_pct = pctError(HFOV_deg, targetHFOV);
 VFOV_err_pct = pctError(VFOV_deg, targetVFOV);
 
