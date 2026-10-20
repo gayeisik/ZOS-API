@@ -9,13 +9,17 @@ if isequal(folderPath, 0)
     return;
 end
 
-% Find ZMX files (case-insensitive)
-files = dir(fullfile(folderPath, '*.zmx'));
-filesUpper = dir(fullfile(folderPath, '*.ZMX'));
+% Find ZMX files whose names start with "MC_T"
+filePrefix = 'MC_T';
+files = dir(fullfile(folderPath, [filePrefix '*.zmx']));
+filesUpper = dir(fullfile(folderPath, [filePrefix '*.ZMX']));
 files = [files; filesUpper];
 
+% Windows dir() is case-insensitive; keep only names starting exactly with the prefix
+files = files(startsWith(string({files.name}), filePrefix));
+
 if isempty(files)
-    error('No ZMX files found.');
+    error('No ZMX files starting with "%s" found.', filePrefix);
 end
 
 % Remove duplicate filenames, if any
