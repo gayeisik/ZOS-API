@@ -195,6 +195,7 @@ end
 %% Plots: one figure per field (tangential and sagittal)
 colors = lines(nYield);
 legendText = ["Mean", compose("%d%% yield", yieldLevels)];
+fieldFigs = gobjects(nFields, 1);
 
 for f = 1:nFields
     fig = figure('Name', sprintf('MTF - %s', fieldLabels(f)), 'Color', 'w', ...
@@ -221,6 +222,7 @@ for f = 1:nFields
     end
 
     sgtitle(sprintf('Polychromatic FFT MTF - %d files', nValid));
+    fieldFigs(f) = fig;
 
     imageFile = fullfile(outFolder, sprintf('MTF_Field%d.png', f));
     try
@@ -271,6 +273,80 @@ writetable(Files, outputFile, 'Sheet', 'Files');
 % Raw per-file MTF curves for further analysis
 save(fullfile(outFolder, 'MTF_RawData.mat'), 'freqGrid', 'MTF_T', 'MTF_S', ...
     'fileNames', 'status', 'fieldLabels', 'yieldLevels');
+
+%% PDF report: summary page + one page per field
+pdfFile = fullfile(outFolder, 'MTF_Report.pdf');
+
+if isfile(pdfFile)
+    delete(pdfFile);
+end
+
+% Summary page text
+colNames = Summary.Properties.VariableNames(2:end);
+header = sprintf('%-30s', 'Field');
+header = [header, sprintf('%12s', colNames{:})];
+
+report = {
+    'MTF YIELD ANALYSIS REPORT'
+    ''
+    sprintf('Date:              %s', char(datetime('now', 'Format', 'dd.MM.yyyy HH:mm')))
+    sprintf('Folder:            %s', folderPath)
+    sprintf('File prefix:       %s', filePrefix)
+    sprintf('Valid files:       %d / %d', nValid, nFiles)
+    sprintf('Max frequency:     %.2f cyc/mm', maxFreq)
+    sprintf('Yield levels:      %s %%', strjoin(string(yieldLevels), ', '))
+    'MTF type:          Polychromatic FFT MTF (all wavelengths, all fields)'
+    ''
+    sprintf('MTF at %.2f cyc/mm (T: tangential, S: sagittal)', maxFreq)
+    sprintf('Yield X%% = MTF value that at least X%% of the systems meet or exceed')
+    ''
+    header
+    repmat('-', 1, numel(header))
+    };
+
+for f = 1:nFields
+    label = char(fieldLabels(f));
+    label = label(1:min(end, 28));
+    values = table2array(Summary(f, 2:end));
+    report{end + 1, 1} = [sprintf('%-30s', label), sprintf('%12.4f', values)]; %#ok<SAGROW>
+end
+
+failed = fileNames(~valid);
+if ~isempty(failed)
+    report = [report; {''; sprintf('Failed files (%d):', numel(failed))}];
+    shown = failed(1:min(end, 15));
+    report = [report; cellstr("  " + shown)];
+    if numel(failed) > numel(shown)
+        report{end + 1, 1} = sprintf('  ... and %d more (see Files sheet in Excel)', numel(failed) - numel(shown));
+    end
+end
+
+reportFig = figure('Name', 'MTF Report', 'Color', 'w', 'Position', [100 100 1200 850]);
+ax = axes(reportFig, 'Position', [0 0 1 1], 'Visible', 'off');
+text(ax, 0.04, 0.96, report, 'VerticalAlignment', 'top', ...
+    'FontName', 'Courier New', 'FontSize', 9, 'Interpreter', 'none');
+
+allFigs = [reportFig; fieldFigs];
+
+try
+    % Multi-page PDF (exportgraphics with 'Append' needs R2021b+)
+    exportgraphics(allFigs(1), pdfFile, 'ContentType', 'vector');
+    for p = 2:numel(allFigs)
+        exportgraphics(allFigs(p), pdfFile, 'ContentType', 'vector', 'Append', true);
+    end
+    fprintf('\nPDF report saved to:\n%s\n', pdfFile);
+catch
+    % Older MATLAB: one PDF file per page
+    if isfile(pdfFile)
+        delete(pdfFile);
+    end
+    for p = 1:numel(allFigs)
+        set(allFigs(p), 'PaperOrientation', 'landscape', 'PaperPositionMode', 'auto');
+        print(allFigs(p), fullfile(outFolder, sprintf('MTF_Report_page%d.pdf', p)), '-dpdf', '-bestfit');
+    end
+    fprintf('\nMulti-page PDF not supported in this MATLAB version;\n');
+    fprintf('report saved as separate pages (MTF_Report_page*.pdf).\n');
+end
 
 fprintf('\nResults saved to:\n%s\n', outFolder);
 
