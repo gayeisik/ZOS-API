@@ -212,14 +212,21 @@ if ~isfolder(outFolder)
     mkdir(outFolder);
 end
 
-%% Plots: one figure per yield level (left: all fields, right: on-axis field)
+%% Plots: mean MTF + one figure per yield level (left: all fields, right: on-axis field)
 % Solid: tangential, dashed: sagittal, black: diffraction limit
 fieldColors = lines(nFields);
 showDiffS = max(abs(diffT - diffS)) > 1e-6;
-yieldFigs = gobjects(nYield, 1);
 
-for y = 1:nYield
-    fig = figure('Name', sprintf('MTF - %d%% yield', yieldLevels(y)), 'Color', 'w', ...
+% Level 1: mean MTF, levels 2..end: yield MTF
+plotT = cat(2, reshape(meanT, nFreq, 1, nFields), yieldT);
+plotS = cat(2, reshape(meanS, nFreq, 1, nFields), yieldS);
+levelNames = ["Mean MTF", compose("%d%% yield", yieldLevels)];
+levelFiles = ["MTF_Mean", compose("MTF_Yield%d", yieldLevels)];
+nLevels = numel(levelNames);
+levelFigs = gobjects(nLevels, 1);
+
+for y = 1:nLevels
+    fig = figure('Name', sprintf('MTF - %s', levelNames(y)), 'Color', 'w', ...
         'Position', [100 100 1400 550]);
 
     panels = {1:nFields, onAxisField};
@@ -233,9 +240,9 @@ for y = 1:nYield
             plot(freqGrid, diffS, 'k--', 'LineWidth', 1.5, 'DisplayName', 'Diff. limit S');
         end
         for f = panels{p}
-            plot(freqGrid, yieldT(:, y, f), '-', 'Color', fieldColors(f, :), ...
+            plot(freqGrid, plotT(:, y, f), '-', 'Color', fieldColors(f, :), ...
                 'LineWidth', 1.2, 'DisplayName', sprintf('F%d T', f));
-            plot(freqGrid, yieldS(:, y, f), '--', 'Color', fieldColors(f, :), ...
+            plot(freqGrid, plotS(:, y, f), '--', 'Color', fieldColors(f, :), ...
                 'LineWidth', 1.2, 'DisplayName', sprintf('F%d S', f));
         end
         hold off;
@@ -249,10 +256,10 @@ for y = 1:nYield
         box on;
     end
 
-    sgtitle(sprintf('Polychromatic FFT MTF - %d%% yield (%d files)', yieldLevels(y), nValid));
-    yieldFigs(y) = fig;
+    sgtitle(sprintf('Polychromatic FFT MTF - %s (%d files)', levelNames(y), nValid));
+    levelFigs(y) = fig;
 
-    imageFile = fullfile(outFolder, sprintf('MTF_Yield%d.png', yieldLevels(y)));
+    imageFile = fullfile(outFolder, levelFiles(y) + ".png");
     try
         exportgraphics(fig, imageFile, 'Resolution', 300);   % R2020a+
     catch
@@ -306,7 +313,7 @@ writetable(Files, outputFile, 'Sheet', 'Files');
 save(fullfile(outFolder, 'MTF_RawData.mat'), 'freqGrid', 'MTF_T', 'MTF_S', ...
     'diffT', 'diffS', 'fileNames', 'status', 'fieldLabels', 'yieldLevels');
 
-%% PDF report: summary page + one page per yield level
+%% PDF report: summary page + mean MTF page + one page per yield level
 pdfFile = fullfile(outFolder, 'MTF_Report.pdf');
 
 if isfile(pdfFile)
@@ -366,7 +373,7 @@ ax = axes(reportFig, 'Position', [0 0 1 1], 'Visible', 'off');
 text(ax, 0.04, 0.96, report, 'VerticalAlignment', 'top', ...
     'FontName', 'Courier New', 'FontSize', 9, 'Interpreter', 'none');
 
-allFigs = [reportFig; yieldFigs];
+allFigs = [reportFig; levelFigs];
 
 try
     % Multi-page PDF (exportgraphics with 'Append' needs R2021b+)
