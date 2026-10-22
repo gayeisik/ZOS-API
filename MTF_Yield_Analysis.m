@@ -53,6 +53,10 @@ MTF_T = [];          % nFiles x nFreq x nFields (tangential)
 MTF_S = [];          % nFiles x nFreq x nFields (sagittal)
 fieldLabels = strings(0, 1);
 nFields = 0;
+onAxisField = 1;
+diffT = [];          % diffraction limit (tangential)
+diffS = [];          % diffraction limit (sagittal)
+diffSource = "";
 
 fprintf('Computing MTF for %d files...\n', nFiles);
 wb = waitbar(0, 'Computing MTF...', 'Name', 'MTF Analysis');
@@ -80,39 +84,53 @@ try
             settings.SampleSize = ZOSAPI.Analysis.SampleSizes.S_64x64;
             settings.Wavelength.UseAllWavelengths();
             settings.Field.UseAllFields();
+            try
+                settings.ShowDiffractionLimit = true;
+            catch
+            end
 
             mtf.ApplyAndWaitForCompletion();
             results = mtf.GetResults();
             nSeries = results.NumberOfDataSeries;
+            dataSeries = results.DataSeries;
+
+            % Separate field series from the diffraction limit series
+            isDiff = false(nSeries, 1);
+            for s = 1:nSeries
+                isDiff(s) = contains(lower(string(char(dataSeries(s).Description))), "diff");
+            end
+            fieldIdx = find(~isDiff);
 
             % First successful file defines the number of fields
             if nFields == 0
-                nFields = nSeries;
+                nFields = numel(fieldIdx);
                 MTF_T = nan(nFiles, nFreq, nFields);
                 MTF_S = nan(nFiles, nFreq, nFields);
                 fieldLabels = strings(nFields, 1);
-            elseif nSeries ~= nFields
-                error('Number of fields (%d) differs from first file (%d).', nSeries, nFields);
+                onAxisField = findOnAxisField(TheSystem);
+            elseif numel(fieldIdx) ~= nFields
+                error('Number of fields (%d) differs from first file (%d).', numel(fieldIdx), nFields);
             end
 
-            dataSeries = results.DataSeries;
-
             for f = 1:nFields
-                data = dataSeries(f);
-                x = data.XData.Data.double;
-                y = data.YData.Data.double;
-
-                x = x(:);
-                if size(y, 1) ~= numel(x)
-                    y = y.';
-                end
-
-                % Column 1: tangential, column 2: sagittal
-                MTF_T(k, :, f) = interp1(x, y(:, 1), freqGrid, 'linear', 'extrap');
-                MTF_S(k, :, f) = interp1(x, y(:, 2), freqGrid, 'linear', 'extrap');
+                data = dataSeries(fieldIdx(f));
+                [MTF_T(k, :, f), MTF_S(k, :, f)] = readSeries(data, freqGrid);
 
                 if fieldLabels(f) == ""
                     fieldLabels(f) = strtrim(string(char(data.Description)));
+                end
+            end
+
+            % Diffraction limit (taken once, from the first successful file)
+            if isempty(diffT)
+                diffIdx = find(isDiff, 1);
+                if ~isempty(diffIdx)
+                    [diffT, diffS] = readSeries(dataSeries(diffIdx), freqGrid);
+                    diffSource = "OpticStudio FFT MTF";
+                else
+                    diffT = analyticDiffLimit(TheSystem, freqGrid);
+                    diffS = diffT;
+                    diffSource = "Analytical (circular aperture, working F/#)";
                 end
             end
 
@@ -159,6 +177,8 @@ MTF_S_valid = MTF_S(valid, :, :);
 % Clip small interpolation overshoots
 MTF_T_valid = min(max(MTF_T_valid, 0), 1);
 MTF_S_valid = min(max(MTF_S_valid, 0), 1);
+diffT = min(max(diffT, 0), 1);
+diffS = min(max(diffS, 0), 1);
 
 for f = 1:nFields
     if fieldLabels(f) == ""
@@ -192,39 +212,47 @@ if ~isfolder(outFolder)
     mkdir(outFolder);
 end
 
-%% Plots: one figure per field (tangential and sagittal)
-colors = lines(nYield);
-legendText = ["Mean", compose("%d%% yield", yieldLevels)];
-fieldFigs = gobjects(nFields, 1);
+%% Plots: one figure per yield level (left: all fields, right: on-axis field)
+% Solid: tangential, dashed: sagittal, black: diffraction limit
+fieldColors = lines(nFields);
+showDiffS = max(abs(diffT - diffS)) > 1e-6;
+yieldFigs = gobjects(nYield, 1);
 
-for f = 1:nFields
-    fig = figure('Name', sprintf('MTF - %s', fieldLabels(f)), 'Color', 'w', ...
-        'Position', [100 100 1200 450]);
+for y = 1:nYield
+    fig = figure('Name', sprintf('MTF - %d%% yield', yieldLevels(y)), 'Color', 'w', ...
+        'Position', [100 100 1400 550]);
 
-    curves = {meanT(:, f), yieldT(:, :, f); meanS(:, f), yieldS(:, :, f)};
-    direction = ["Tangential", "Sagittal"];
+    panels = {1:nFields, onAxisField};
+    panelTitles = ["All fields", "On-axis field: " + fieldLabels(onAxisField)];
 
-    for d = 1:2
-        subplot(1, 2, d);
-        plot(freqGrid, curves{d, 1}, 'k-', 'LineWidth', 2);
+    for p = 1:2
+        subplot(1, 2, p);
         hold on;
-        for y = 1:nYield
-            plot(freqGrid, curves{d, 2}(:, y), '-', 'Color', colors(y, :), 'LineWidth', 1.2);
+        plot(freqGrid, diffT, 'k-', 'LineWidth', 1.5, 'DisplayName', 'Diff. limit');
+        if showDiffS
+            plot(freqGrid, diffS, 'k--', 'LineWidth', 1.5, 'DisplayName', 'Diff. limit S');
+        end
+        for f = panels{p}
+            plot(freqGrid, yieldT(:, y, f), '-', 'Color', fieldColors(f, :), ...
+                'LineWidth', 1.2, 'DisplayName', sprintf('F%d T', f));
+            plot(freqGrid, yieldS(:, y, f), '--', 'Color', fieldColors(f, :), ...
+                'LineWidth', 1.2, 'DisplayName', sprintf('F%d S', f));
         end
         hold off;
         xlim([0 maxFreq]);
         ylim([0 1]);
         xlabel('Spatial frequency (cyc/mm)');
         ylabel('Modulus of the OTF');
-        title(sprintf('%s - %s', direction(d), fieldLabels(f)));
-        legend(legendText, 'Location', 'southwest');
+        title(panelTitles(p), 'Interpreter', 'none');
+        legend('Location', 'northeast', 'NumColumns', 2);
         grid on;
+        box on;
     end
 
-    sgtitle(sprintf('Polychromatic FFT MTF - %d files', nValid));
-    fieldFigs(f) = fig;
+    sgtitle(sprintf('Polychromatic FFT MTF - %d%% yield (%d files)', yieldLevels(y), nValid));
+    yieldFigs(y) = fig;
 
-    imageFile = fullfile(outFolder, sprintf('MTF_Field%d.png', f));
+    imageFile = fullfile(outFolder, sprintf('MTF_Yield%d.png', yieldLevels(y)));
     try
         exportgraphics(fig, imageFile, 'Resolution', 300);   % R2020a+
     catch
@@ -267,14 +295,18 @@ end
 FieldInfo = table((1:nFields)', fieldLabels, 'VariableNames', {'Field', 'Description'});
 writetable(FieldInfo, outputFile, 'Sheet', 'Field Info');
 
+DiffTable = table(freqGrid, diffT, diffS, ...
+    'VariableNames', {'Frequency_cyc_mm', 'DiffLimit_T', 'DiffLimit_S'});
+writetable(DiffTable, outputFile, 'Sheet', 'Diffraction Limit');
+
 Files = table(fileNames, status, 'VariableNames', {'FileName', 'Status'});
 writetable(Files, outputFile, 'Sheet', 'Files');
 
 % Raw per-file MTF curves for further analysis
 save(fullfile(outFolder, 'MTF_RawData.mat'), 'freqGrid', 'MTF_T', 'MTF_S', ...
-    'fileNames', 'status', 'fieldLabels', 'yieldLevels');
+    'diffT', 'diffS', 'fileNames', 'status', 'fieldLabels', 'yieldLevels');
 
-%% PDF report: summary page + one page per field
+%% PDF report: summary page + one page per yield level
 pdfFile = fullfile(outFolder, 'MTF_Report.pdf');
 
 if isfile(pdfFile)
@@ -296,6 +328,10 @@ report = {
     sprintf('Max frequency:     %.2f cyc/mm', maxFreq)
     sprintf('Yield levels:      %s %%', strjoin(string(yieldLevels), ', '))
     'MTF type:          Polychromatic FFT MTF (all wavelengths, all fields)'
+    sprintf('On-axis field:     Field %d (%s)', onAxisField, char(fieldLabels(onAxisField)))
+    sprintf('Diffraction limit: %s', char(diffSource))
+    ''
+    'Fields (plots: solid = tangential, dashed = sagittal)'
     ''
     sprintf('MTF at %.2f cyc/mm (T: tangential, S: sagittal)', maxFreq)
     sprintf('Yield X%% = MTF value that at least X%% of the systems meet or exceed')
@@ -304,12 +340,16 @@ report = {
     repmat('-', 1, numel(header))
     };
 
+fieldLines = compose("  F%d: %s", (1:nFields)', fieldLabels);
+report = [report(1:14); cellstr(fieldLines); report(15:end)];
+
 for f = 1:nFields
-    label = char(fieldLabels(f));
+    label = sprintf('F%d: %s', f, char(fieldLabels(f)));
     label = label(1:min(end, 28));
     values = table2array(Summary(f, 2:end));
     report{end + 1, 1} = [sprintf('%-30s', label), sprintf('%12.4f', values)]; %#ok<SAGROW>
 end
+report{end + 1, 1} = sprintf('%-30s%12.4f%12.4f', 'Diffraction limit', diffT(end), diffS(end));
 
 failed = fileNames(~valid);
 if ~isempty(failed)
@@ -326,7 +366,7 @@ ax = axes(reportFig, 'Position', [0 0 1 1], 'Visible', 'off');
 text(ax, 0.04, 0.96, report, 'VerticalAlignment', 'top', ...
     'FontName', 'Courier New', 'FontSize', 9, 'Interpreter', 'none');
 
-allFigs = [reportFig; fieldFigs];
+allFigs = [reportFig; yieldFigs];
 
 try
     % Multi-page PDF (exportgraphics with 'Append' needs R2021b+)
@@ -357,6 +397,60 @@ function v = yieldValue(data, yieldPct)
 sorted = sort(data, 1, 'descend');
 idx = max(1, ceil(yieldPct / 100 * size(data, 1)));
 v = sorted(idx, :);
+end
+
+function [t, s] = readSeries(data, freqGrid)
+% Reads one FFT MTF data series (column 1: tangential, column 2: sagittal)
+% and interpolates it to the common frequency grid.
+x = data.XData.Data.double;
+y = data.YData.Data.double;
+
+x = x(:);
+if size(y, 1) ~= numel(x)
+    y = y.';
+end
+
+t = interp1(x, y(:, 1), freqGrid, 'linear', 'extrap');
+if size(y, 2) > 1
+    s = interp1(x, y(:, 2), freqGrid, 'linear', 'extrap');
+else
+    s = t;
+end
+end
+
+function idx = findOnAxisField(TheSystem)
+% Returns the first field at (0, 0); field 1 if none is found
+idx = 1;
+try
+    sysFields = TheSystem.SystemData.Fields;
+    for i = 1:sysFields.NumberOfFields
+        fld = sysFields.GetField(i);
+        if fld.X == 0 && fld.Y == 0
+            idx = i;
+            return;
+        end
+    end
+catch
+end
+end
+
+function mtf = analyticDiffLimit(TheSystem, freqGrid)
+% Polychromatic diffraction-limited MTF of a circular aperture (on axis),
+% used only if OpticStudio does not return a diffraction limit series.
+fno = TheSystem.MFE.GetOperandValue( ...
+    ZOSAPI.Editors.MFE.MeritOperandType.WFNO, 0, 0, 0, 0, 0, 0, 0, 0);
+wls = TheSystem.SystemData.Wavelengths;
+
+mtf = zeros(size(freqGrid));
+wSum = 0;
+for i = 1:wls.NumberOfWavelengths
+    wl = wls.GetWavelength(i);
+    fc = 1 / (wl.Wavelength * 1e-3 * abs(fno));   % cutoff frequency (cyc/mm)
+    nu = min(freqGrid / fc, 1);
+    mtf = mtf + wl.Weight * (2 / pi) * (acos(nu) - nu .* sqrt(1 - nu.^2));
+    wSum = wSum + wl.Weight;
+end
+mtf = mtf / wSum;
 end
 
 function app = InitConnection()
