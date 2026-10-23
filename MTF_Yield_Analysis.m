@@ -276,9 +276,6 @@ for y = 1:nYield
     Summary.(char(yieldNames(y) + "_S")) = squeeze(yieldS(end, y, :));
 end
 
-fprintf('\nMTF at %.2f cyc/mm (T: tangential, S: sagittal):\n', maxFreq);
-disp(Summary);
-
 %% Export Excel
 outputFile = fullfile(outFolder, 'MTF_Results.xlsx');
 
