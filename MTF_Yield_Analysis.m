@@ -45,7 +45,7 @@ nominalFiles = allZmx(~startsWith(string({allZmx.name}), 'MC_', 'IgnoreCase', tr
 
 if isempty(nominalFiles)
     error('No nominal .zmx file (name not starting with "MC_") found in the folder.');
-elseif numel(nominalFiles) == 1
+elseif isscalar(nominalFiles)
     nominalName = nominalFiles(1).name;
 else
     [sel, ok] = listdlg('ListString', {nominalFiles.name}, 'SelectionMode', 'single', ...
