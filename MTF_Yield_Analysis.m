@@ -284,13 +284,14 @@ levelFigs = gobjects(nLevels, 1);
 
 for y = 1:nLevels
     fig = figure('Name', sprintf('MTF - %s', levelNames(y)), 'Color', 'w', ...
-        'Position', [100 100 1400 800]);
+        'Position', [50 50 1500 750]);
 
     panels = {1:nFields, onAxisField};
+    axPos = {[0.05 0.32 0.42 0.56], [0.54 0.32 0.42 0.56]};   % fixed axes boxes
     panelTitles = ["All fields", "On-axis field: " + fieldLabels(onAxisField)];
 
     for p = 1:2
-        subplot(1, 2, p);
+        ax = axes(fig, 'Position', axPos{p});
         hold on;
         plot(freqGrid, diffT, 'k-', 'LineWidth', 1.5, 'DisplayName', 'Diff. limit');
         if showDiffS
@@ -308,9 +309,17 @@ for y = 1:nLevels
         xlabel('Spatial frequency (cyc/mm)');
         ylabel('Modulus of the OTF');
         title(panelTitles(p), 'Interpreter', 'none');
-        legend('Location', 'southoutside', 'NumColumns', 6);
         grid on;
         box on;
+
+        % Same plot box size and aspect ratio (x:y = 1.6:1) for every plot
+        pbaspect(ax, [1.6 1 1]);
+
+        % Legend below the plot; placed manually so it does not resize the axes
+        lgd = legend(ax, 'NumColumns', 6, 'Location', 'none');
+        lgd.Units = 'normalized';
+        lp = lgd.Position;
+        lgd.Position = [axPos{p}(1) + (axPos{p}(3) - lp(3)) / 2, 0.24 - lp(4), lp(3), lp(4)];
     end
 
     sgtitle(sprintf('Polychromatic FFT MTF - %s (%d files)', levelNames(y), nValid));
