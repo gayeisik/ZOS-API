@@ -284,7 +284,7 @@ levelFigs = gobjects(nLevels, 1);
 
 for y = 1:nLevels
     fig = figure('Name', sprintf('MTF - %s', levelNames(y)), 'Color', 'w', ...
-        'Position', [100 100 1400 550]);
+        'Position', [100 100 1400 800]);
 
     panels = {1:nFields, onAxisField};
     panelTitles = ["All fields", "On-axis field: " + fieldLabels(onAxisField)];
@@ -308,7 +308,7 @@ for y = 1:nLevels
         xlabel('Spatial frequency (cyc/mm)');
         ylabel('Modulus of the OTF');
         title(panelTitles(p), 'Interpreter', 'none');
-        legend('Location', 'northeast', 'NumColumns', 2);
+        legend('Location', 'southoutside', 'NumColumns', 6);
         grid on;
         box on;
     end
