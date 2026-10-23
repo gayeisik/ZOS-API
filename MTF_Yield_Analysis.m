@@ -97,8 +97,7 @@ try
     nominalAfocal = logical(TheSystem.SystemData.Aperture.AFocalImageSpace);
 
     if nominalAfocal
-        % EFL is computed with afocal image space switched off (file is not saved)
-        TheSystem.SystemData.Aperture.AFocalImageSpace = false;
+        % EFL is read in the file's own (afocal) mode
         nominalEFL = TheSystem.MFE.GetOperandValue( ...
             ZOSAPI.Editors.MFE.MeritOperandType.EFFL, 0, 0, 0, 0, 0, 0, 0, 0);
 
