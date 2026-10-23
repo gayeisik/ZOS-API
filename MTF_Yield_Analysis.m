@@ -106,17 +106,13 @@ try
         end
 
         paraxialEFL = abs(nominalEFL);
-        fprintf('Nominal file %s is in afocal mode.
-', nominalName);
-        fprintf('Paraxial lens focal length (|EFL|): %.4f mm
-', paraxialEFL);
+        fprintf('Nominal file %s is in afocal mode.\n', nominalName);
+        fprintf('Paraxial lens focal length (|EFL|): %.4f mm\n', paraxialEFL);
     else
-        fprintf('Nominal file %s is not in afocal mode.
-', nominalName);
+        fprintf('Nominal file %s is not in afocal mode.\n', nominalName);
     end
 
-    fprintf('Nyquist frequency: %.4f cyc/mm (pixel pitch %.2f um)
-', maxFreq, pixelPitch_um);
+    fprintf('Nyquist frequency: %.4f cyc/mm (pixel pitch %.2f um)\n', maxFreq, pixelPitch_um);
 
     for k = 1:nFiles
 
