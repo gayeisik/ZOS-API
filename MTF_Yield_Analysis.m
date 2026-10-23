@@ -362,8 +362,20 @@ save(fullfile(outFolder, 'MTF_RawData.mat'), 'freqGrid', 'MTF_T', 'MTF_S', ...
 %% PDF report: summary page + mean MTF page + one page per yield level
 pdfFile = fullfile(outFolder, 'MTF_Report.pdf');
 
+% Remove old report files (single and per-page)
+oldPages = dir(fullfile(outFolder, 'MTF_Report_page*.pdf'));
+for i = 1:numel(oldPages)
+    delete(fullfile(outFolder, oldPages(i).name));
+end
 if isfile(pdfFile)
     delete(pdfFile);
+end
+
+% If the old report could not be deleted (e.g. open in a PDF viewer),
+% save the new one under a time-stamped name
+if isfile(pdfFile)
+    pdfFile = fullfile(outFolder, ['MTF_Report_' char(datetime('now', 'Format', 'yyyyMMdd_HHmmss')) '.pdf']);
+    fprintf('\nMTF_Report.pdf is open in another program; new report: %s\n', pdfFile);
 end
 
 % Summary page text
