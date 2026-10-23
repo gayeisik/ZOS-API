@@ -552,22 +552,23 @@ TheSystem.SystemData.Aperture.AFocalImageSpace = false;
 end
 
 function [sel, relPct, typeName] = selectFields(TheSystem, halfDiag_mm, efl, limitPct)
-% Relative field (%) of each field = radial image height / detector half-diagonal.
-% Returns the field numbers within limitPct. Angle fields are converted to
-% image height with the EFL; image height fields are used directly (mm).
+% Relative field (%) of each field = radial field / detector half-diagonal.
+% Returns the field numbers within limitPct. Height fields (object or image
+% height, X/Y in mm) are used directly as detector coordinates; angle
+% fields are converted to image height with the EFL.
 sysFields = TheSystem.SystemData.Fields;
 typeName = string(char(sysFields.GetFieldType().ToString()));
 n = sysFields.NumberOfFields;
 r_mm = zeros(n, 1);
 
 isAngle = contains(lower(typeName), "angle");
-isImageHeight = contains(lower(typeName), "imageheight");
+isHeight = contains(lower(typeName), "height");
 
 if isAngle && (~isfinite(efl) || efl == 0)
     error('Angle fields need a valid EFL to convert to image height.');
 end
-if ~isAngle && ~isImageHeight
-    error('Field type "%s" is not supported (use angle or image height fields).', typeName);
+if ~isAngle && ~isHeight
+    error('Field type "%s" is not supported (use height or angle fields).', typeName);
 end
 
 for i = 1:n
