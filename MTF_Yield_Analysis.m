@@ -131,11 +131,9 @@ try
                 error('OpticStudio could not load this file.');
             end
 
-            % Afocal file: add paraxial lens before image, switch afocal mode off
-            if TheSystem.SystemData.Aperture.AFocalImageSpace
-                if isnan(paraxialEFL)
-                    error('File is afocal but the nominal file is not; no focal length for the paraxial lens.');
-                end
+            % Nominal is afocal (so MC files are too): add paraxial lens
+            % before image, switch afocal mode off
+            if nominalAfocal
                 addParaxialFocus(TheSystem, paraxialEFL);
                 nConverted = nConverted + 1;
             end
