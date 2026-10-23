@@ -423,8 +423,9 @@ try
         exportgraphics(allFigs(p), pdfFile, 'ContentType', 'vector', 'Append', true);
     end
     fprintf('\nPDF report saved to:\n%s\n', pdfFile);
-catch
+catch pdfErr
     % Older MATLAB: one PDF file per page
+    fprintf('\nMulti-page PDF export failed: %s\n', pdfErr.message);
     if isfile(pdfFile)
         delete(pdfFile);
     end
