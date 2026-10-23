@@ -3,11 +3,15 @@ clear;
 close all;
 
 %% User settings
-filePrefix  = 'MC_T';             % only files starting with this are used
-maxFreq     = 41.7;               % maximum spatial frequency (cyc/mm), e.g. Nyquist
-nFreqPoints = 100;                % number of frequency steps from 0 to maxFreq
-yieldLevels = [50 80 90 95];      % yield levels (%)
+filePrefix    = 'MC_T';           % only files starting with this are used
+pixelPitch_um = 12;               % detector pixel pitch (um)
+nFreqPoints   = 100;              % number of frequency steps from 0 to maxFreq
+yieldLevels   = [50 80 90 95];    % yield levels (%)
 % FFT MTF sample size is set in the "Compute MTF" section (S_64x64 by default)
+% Nominal file: the .zmx file in the folder whose name does NOT start with "MC_"
+
+% Nyquist frequency of the detector, used as the maximum MTF frequency
+maxFreq = 1000 / (2 * pixelPitch_um);   % cyc/mm
 
 %% Select folder
 folderPath = uigetdir(pwd, 'Select Zemax folder');
@@ -33,6 +37,25 @@ end
 files = files(uniqueIdx);
 nFiles = numel(files);
 
+% Nominal file: .zmx file whose name does not start with "MC_"
+allZmx = [dir(fullfile(folderPath, '*.zmx')); dir(fullfile(folderPath, '*.ZMX'))];
+[~, uniqueIdx] = unique(lower(string({allZmx.name})), 'stable');
+allZmx = allZmx(uniqueIdx);
+nominalFiles = allZmx(~startsWith(string({allZmx.name}), 'MC_', 'IgnoreCase', true));
+
+if isempty(nominalFiles)
+    error('No nominal .zmx file (name not starting with "MC_") found in the folder.');
+elseif numel(nominalFiles) == 1
+    nominalName = nominalFiles(1).name;
+else
+    [sel, ok] = listdlg('ListString', {nominalFiles.name}, 'SelectionMode', 'single', ...
+        'PromptString', 'Select the nominal file:', 'ListSize', [400 200]);
+    if ~ok
+        return;
+    end
+    nominalName = nominalFiles(sel).name;
+end
+
 %% Initialize ZOS-API connection
 % InitConnection and CleanupConnection are from the
 % official Zemax MATLAB standalone sample files.
@@ -57,12 +80,44 @@ onAxisField = 1;
 diffT = [];          % diffraction limit (tangential)
 diffS = [];          % diffraction limit (sagittal)
 diffSource = "";
+paraxialEFL = NaN;   % focal length of the paraxial lens added to afocal files (mm)
+nConverted = 0;      % number of afocal MC files converted with a paraxial lens
 
 fprintf('Computing MTF for %d files...\n', nFiles);
 wb = waitbar(0, 'Computing MTF...', 'Name', 'MTF Analysis');
 
 try
     TheSystem = TheApplication.PrimarySystem;
+
+    %% Nominal file: afocal check and EFL
+    if ~TheSystem.LoadFile(fullfile(folderPath, nominalName), false)
+        error('OpticStudio could not load the nominal file: %s', nominalName);
+    end
+
+    nominalAfocal = logical(TheSystem.SystemData.Aperture.AFocalImageSpace);
+
+    if nominalAfocal
+        % EFL is computed with afocal image space switched off (file is not saved)
+        TheSystem.SystemData.Aperture.AFocalImageSpace = false;
+        nominalEFL = TheSystem.MFE.GetOperandValue( ...
+            ZOSAPI.Editors.MFE.MeritOperandType.EFFL, 0, 0, 0, 0, 0, 0, 0, 0);
+
+        if ~isfinite(nominalEFL) || nominalEFL == 0
+            error('Could not compute the EFL of the nominal file: %s', nominalName);
+        end
+
+        paraxialEFL = abs(nominalEFL);
+        fprintf('Nominal file %s is in afocal mode.
+', nominalName);
+        fprintf('Paraxial lens focal length (|EFL|): %.4f mm
+', paraxialEFL);
+    else
+        fprintf('Nominal file %s is not in afocal mode.
+', nominalName);
+    end
+
+    fprintf('Nyquist frequency: %.4f cyc/mm (pixel pitch %.2f um)
+', maxFreq, pixelPitch_um);
 
     for k = 1:nFiles
 
@@ -75,6 +130,15 @@ try
 
             if ~loaded
                 error('OpticStudio could not load this file.');
+            end
+
+            % Afocal file: add paraxial lens before image, switch afocal mode off
+            if TheSystem.SystemData.Aperture.AFocalImageSpace
+                if isnan(paraxialEFL)
+                    error('File is afocal but the nominal file is not; no focal length for the paraxial lens.');
+                end
+                addParaxialFocus(TheSystem, paraxialEFL);
+                nConverted = nConverted + 1;
             end
 
             % FFT MTF analysis
@@ -299,7 +363,8 @@ writetable(Files, outputFile, 'Sheet', 'Files');
 
 % Raw per-file MTF curves for further analysis
 save(fullfile(outFolder, 'MTF_RawData.mat'), 'freqGrid', 'MTF_T', 'MTF_S', ...
-    'diffT', 'diffS', 'fileNames', 'status', 'fieldLabels', 'yieldLevels');
+    'diffT', 'diffS', 'fileNames', 'status', 'fieldLabels', 'yieldLevels', ...
+    'pixelPitch_um', 'maxFreq', 'nominalName', 'nominalAfocal', 'paraxialEFL');
 
 %% PDF report: summary page + mean MTF page + one page per yield level
 pdfFile = fullfile(outFolder, 'MTF_Report.pdf');
@@ -309,6 +374,13 @@ if isfile(pdfFile)
 end
 
 % Summary page text
+if nominalAfocal
+    afocalText = sprintf(['Yes - paraxial lens (f = %.4f mm) added before image ' ...
+        'in %d MC file(s), afocal mode off'], paraxialEFL, nConverted);
+else
+    afocalText = 'No';
+end
+
 report = {
     'MTF YIELD ANALYSIS REPORT'
     ''
@@ -316,7 +388,10 @@ report = {
     sprintf('Folder:            %s', folderPath)
     sprintf('File prefix:       %s', filePrefix)
     sprintf('Valid files:       %d / %d', nValid, nFiles)
-    sprintf('Max frequency:     %.2f cyc/mm', maxFreq)
+    sprintf('Pixel pitch:       %.2f um', pixelPitch_um)
+    sprintf('Max frequency:     %.2f cyc/mm (Nyquist)', maxFreq)
+    sprintf('Nominal file:      %s', nominalName)
+    sprintf('Afocal mode:       %s', afocalText)
     sprintf('Yield levels:      %s %%', strjoin(string(yieldLevels), ', '))
     'MTF type:          Polychromatic FFT MTF (all wavelengths, all fields)'
     sprintf('On-axis field:     Field %d (%s)', onAxisField, char(fieldLabels(onAxisField)))
@@ -328,7 +403,8 @@ report = {
     };
 
 fieldLines = compose("  F%d: %s", (1:nFields)', fieldLabels);
-report = [report(1:14); cellstr(fieldLines); report(15:end)];
+idx = find(strcmp(report, 'Fields (plots: solid = tangential, dashed = sagittal)'), 1);
+report = [report(1:idx); cellstr(fieldLines); report(idx + 1:end)];
 
 failed = fileNames(~valid);
 if ~isempty(failed)
@@ -395,6 +471,23 @@ if size(y, 2) > 1
 else
     s = t;
 end
+end
+
+function addParaxialFocus(TheSystem, focalLength)
+% Inserts a paraxial lens before the image surface (focal length and
+% thickness = focalLength) and switches afocal image space off, so the
+% MTF is reported in cyc/mm. The file on disk is not changed.
+lde = TheSystem.LDE;
+imageIdx = lde.NumberOfSurfaces - 1;
+
+lde.InsertNewSurfaceAt(imageIdx);
+surf = lde.GetSurfaceAt(imageIdx);
+surf.ChangeType(surf.GetSurfaceTypeSettings(ZOSAPI.Editors.LDE.SurfaceType.Paraxial));
+surf.GetSurfaceCell(ZOSAPI.Editors.LDE.SurfaceColumn.Par1).DoubleValue = focalLength;
+surf.Thickness = focalLength;
+surf.Comment = 'Paraxial focus (MTF script)';
+
+TheSystem.SystemData.Aperture.AFocalImageSpace = false;
 end
 
 function idx = findOnAxisField(TheSystem)
