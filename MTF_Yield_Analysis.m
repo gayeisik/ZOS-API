@@ -267,15 +267,6 @@ for y = 1:nLevels
     end
 end
 
-%% Summary at maximum frequency
-yieldNames = compose("Yield%d", yieldLevels);
-Summary = table(fieldLabels, meanT(end, :)', meanS(end, :)', ...
-    'VariableNames', {'Field', 'Mean_T', 'Mean_S'});
-for y = 1:nYield
-    Summary.(char(yieldNames(y) + "_T")) = squeeze(yieldT(end, y, :));
-    Summary.(char(yieldNames(y) + "_S")) = squeeze(yieldS(end, y, :));
-end
-
 %% Export Excel
 outputFile = fullfile(outFolder, 'MTF_Results.xlsx');
 
@@ -284,7 +275,7 @@ if isfile(outputFile)
     delete(outputFile);
 end
 
-writetable(Summary, outputFile, 'Sheet', 'Summary at max freq');
+yieldNames = compose("Yield%d", yieldLevels);
 
 for f = 1:nFields
     FieldTable = table(freqGrid, meanT(:, f), meanS(:, f), ...
@@ -318,10 +309,6 @@ if isfile(pdfFile)
 end
 
 % Summary page text
-colNames = Summary.Properties.VariableNames(2:end);
-header = sprintf('%-30s', 'Field');
-header = [header, sprintf('%12s', colNames{:})];
-
 report = {
     'MTF YIELD ANALYSIS REPORT'
     ''
@@ -337,23 +324,11 @@ report = {
     ''
     'Fields (plots: solid = tangential, dashed = sagittal)'
     ''
-    sprintf('MTF at %.2f cyc/mm (T: tangential, S: sagittal)', maxFreq)
     sprintf('Yield X%% = MTF value that at least X%% of the systems meet or exceed')
-    ''
-    header
-    repmat('-', 1, numel(header))
     };
 
 fieldLines = compose("  F%d: %s", (1:nFields)', fieldLabels);
 report = [report(1:14); cellstr(fieldLines); report(15:end)];
-
-for f = 1:nFields
-    label = sprintf('F%d: %s', f, char(fieldLabels(f)));
-    label = label(1:min(end, 28));
-    values = table2array(Summary(f, 2:end));
-    report{end + 1, 1} = [sprintf('%-30s', label), sprintf('%12.4f', values)]; %#ok<SAGROW>
-end
-report{end + 1, 1} = sprintf('%-30s%12.4f%12.4f', 'Diffraction limit', diffT(end), diffS(end));
 
 failed = fileNames(~valid);
 if ~isempty(failed)
