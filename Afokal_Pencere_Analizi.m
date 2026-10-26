@@ -38,6 +38,8 @@ ayar.mtfDusus     = 0.05;  % kabul edilen goreli MTF dususu (0.05 = nominalin %5
 ayar.cekirdek     = 8;     % optimizasyonda kullanilacak cekirdek sayisi
 ayar.cikti        = 'afokal_pencere_sonuc.csv';
 
+ayar.dosya = strtrim(strrep(ayar.dosya, '"', ''));   % "Yol olarak kopyala" tirnaklarini temizle
+
 %% ===================== BAGLANTI =====================
 TheApplication = baglan(ayar);
 TheSystem = TheApplication.PrimarySystem;

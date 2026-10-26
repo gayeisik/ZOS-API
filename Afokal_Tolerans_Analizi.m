@@ -50,6 +50,13 @@ ayar.A.mcKlasor   = '';        % bos = Dosya A'nin klasoru
 ayar.A.mcOnek     = 'MC_T';    % Zemax'in kaydettigi MC dosyalarinin on eki
 ayar.A.kompOnSurf = 0;         % 0 = otomatik (TDE'deki COMP operandinin yuzeyi)
 
+% "Yol olarak kopyala" ile gelen cift tirnaklari temizle
+ayar.B.dosya = strtrim(strrep(ayar.B.dosya, '"', ''));
+ayar.A.dosya = strtrim(strrep(ayar.A.dosya, '"', ''));
+ayar.A.mcKlasor = strtrim(strrep(ayar.A.mcKlasor, '"', ''));
+if ayar.B.calistir && ~isfile(ayar.B.dosya), error('Dosya B bulunamadi: %s', ayar.B.dosya); end
+if ayar.A.calistir && ~isfile(ayar.A.dosya), error('Dosya A bulunamadi: %s', ayar.A.dosya); end
+
 %% ===================== BAGLANTI =====================
 TheApplication = baglan();
 TheSystem = TheApplication.PrimarySystem;
