@@ -134,7 +134,8 @@ if ayar.B.calistir
     if pencereAlt, fprintf('  (tarama sinirina dayandi: gercek pencere DAHA GENIS)'); end
     fprintf('\n');
     if lo > 1 || hi < n
-        fprintf('Pencereyi sinirlayan: %s\n', strjoin({'strok', 'MTF'}([any(~okStrok) any(~okMTF)]), ' + '));
+        sebepler = {'strok', 'MTF'};
+        fprintf('Pencereyi sinirlayan: %s\n', strjoin(sebepler([any(~okStrok) any(~okMTF)]), ' + '));
     end
 
     T1 = table(phiD, dzB, okStrok, okMTF, 'VariableNames', {'phi_D', 'dz_komp_mm', 'Strok_OK', 'MTF_OK'});
