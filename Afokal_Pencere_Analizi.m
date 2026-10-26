@@ -16,8 +16,8 @@
 clear; clc;
 
 %% ===================== KULLANICI AYARLARI =====================
-ayar.mod          = 'extension';  % 'extension': acik OpticStudio'ya baglan (Programming > Interactive Extension)
-                                  % 'standalone': dosyayi arka planda kendisi acar
+ayar.mod          = 'standalone'; % 'standalone': dosyayi arka planda kendisi acar (diger scriptlerinle ayni yontem)
+                                  % 'extension' : acik OpticStudio'ya baglan (once Programming > Interactive Extension)
 ayar.dosya        = 'C:\Tasarimlar\MWIR_B_paraxial.zmx';  % sadece 'standalone' icin
 
 ayar.paraxSurf    = 12;   % Paraxial yuzeyin numarasi
@@ -202,25 +202,36 @@ end
 
 %% ===================== YARDIMCI FONKSIYONLAR =====================
 function app = baglan(ayar)
+    import System.Reflection.*;
     zemaxData = winqueryreg('HKEY_CURRENT_USER', 'Software\Zemax', 'ZemaxRoot');
-    NET.addAssembly(fullfile(char(zemaxData), 'ZOS-API', 'Libraries', 'ZOSAPI_NetHelper.dll'));
+    NetHelper = strcat(zemaxData, '\ZOS-API\Libraries\ZOSAPI_NetHelper.dll');
+    NET.addAssembly(NetHelper);
     if ~ZOSAPI_NetHelper.ZOSAPI_Initializer.Initialize()
+    % Birden fazla surum kuruluysa ustteki satir yerine:
+    % if ~ZOSAPI_NetHelper.ZOSAPI_Initializer.Initialize('C:\Program Files\Ansys Zemax OpticStudio 2025 R2.04')
         error('OpticStudio kurulumu bulunamadi.');
     end
-    zemaxDir = char(ZOSAPI_NetHelper.ZOSAPI_Initializer.GetZemaxDirectory());
-    NET.addAssembly(fullfile(zemaxDir, 'ZOSAPI.dll'));
-    NET.addAssembly(fullfile(zemaxDir, 'ZOSAPI_Interfaces.dll'));
+    disp(['OpticStudio: ' char(ZOSAPI_NetHelper.ZOSAPI_Initializer.GetZemaxDirectory())]);
+    NET.addAssembly(AssemblyName('ZOSAPI_Interfaces'));
+    NET.addAssembly(AssemblyName('ZOSAPI'));
+
     conn = ZOSAPI.ZOSAPI_Connection();
+    conn.ConnectionTimeoutSeconds = 20;
     if strcmp(ayar.mod, 'extension')
         app = conn.ConnectAsExtension(0);
     else
         app = conn.CreateNewApplication();
     end
     if isempty(app)
-        error('OpticStudio''ya baglanilamadi. Extension modunda Programming > Interactive Extension acik olmali.');
+        error('OpticStudio''ya baglanilamadi.');
     end
     if ~app.IsValidLicenseForAPI
-        error('Bu lisans ZOS-API kullanimina izin vermiyor.');
+        if strcmp(ayar.mod, 'extension')
+            error(['Extension baglantisi kurulamadi. OpticStudio''da Programming > Interactive Extension''a ' ...
+                   'basip "Waiting for connection" yazisini gordukten sonra calistir; ya da ayar.mod = ''standalone'' kullan.']);
+        else
+            error('Lisans kontrolu basarisiz (standalone).');
+        end
     end
 end
 
