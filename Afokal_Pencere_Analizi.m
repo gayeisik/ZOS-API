@@ -51,9 +51,20 @@ sP    = LDE.GetSurfaceAt(ayar.paraxSurf);
 sOn   = LDE.GetSurfaceAt(ayar.kompOnSurf);
 sArka = LDE.GetSurfaceAt(ayar.kompArkaSurf);
 
-if ~contains(lower(char(sP.TypeName)), 'paraxial')
-    error('Yuzey %d Paraxial degil (tip: %s). ayar.paraxSurf numarasini kontrol et.', ...
-          ayar.paraxSurf, char(sP.TypeName));
+fprintf('Acilan dosya: %s\n', char(TheSystem.SystemFile));
+if ~paraxialMi(sP)
+    % Dosyadaki tum Paraxial yuzeyleri bul ve listele
+    bulunan = [];
+    for i = 1:LDE.NumberOfSurfaces - 1
+        if paraxialMi(LDE.GetSurfaceAt(i)), bulunan(end+1) = i; end %#ok<AGROW>
+    end
+    if isempty(bulunan)
+        error(['Acilan dosyada hic Paraxial yuzey yok. ayar.dosya dogru dosyayi mi gosteriyor, ' ...
+               've paraxial ekledikten sonra dosyayi KAYDETTIN mi?']);
+    else
+        error('Yuzey %d Paraxial degil (tip: %s). Paraxial yuzey(ler): %s -> ayar.paraxSurf''i buna gore duzelt.', ...
+              ayar.paraxSurf, char(sP.TypeName), mat2str(bulunan));
+    end
 end
 if ~contains(lower(char(TheSystem.SystemData.Units.LensUnits.ToString())), 'millimeter')
     warning('Lens birimi mm degil. Kod mm varsayiyor.');
@@ -233,6 +244,11 @@ function app = baglan(ayar)
             error('Lisans kontrolu basarisiz (standalone).');
         end
     end
+end
+
+function e = paraxialMi(surf)
+    e = contains(lower(char(surf.TypeName)), 'paraxial') || ...
+        contains(lower(char(surf.Type.ToString())), 'paraxial');
 end
 
 function optimizeEt(TheSystem, cekirdek)
