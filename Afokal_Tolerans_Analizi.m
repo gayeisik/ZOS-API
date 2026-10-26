@@ -33,15 +33,17 @@ ayar.cekirdek  = 8;      % optimizasyon cekirdek sayisi
 ayar.cikti     = 'afokal_tolerans_sonuc';   % cikti dosyalarinin on adi (.csv eklenir)
 
 % ---------- PARCA 1: Dosya B (paraxial tarama) ----------
-ayar.B.calistir   = true;   % false: tarama yapma, asagidaki egim/pencere degerlerini kullan
+ayar.B.calistir   = true;   % true : tarama yap, egim ve pencereyi BU tasarimdan hesapla (yeni tasarimda hep true)
+                            % false: tarama yapma, onceki kosunun kaydettigi sonucu kullan
 ayar.B.dosya      = 'C:\...\DOSYA_B_paraxial.zmx';
 ayar.B.paraxSurf  = 0;      % 0 = otomatik (dosyadaki tek Paraxial yuzey)
 ayar.B.kompOnSurf = 0;      % 0 = otomatik (dosyadaki tek DEGISKEN kalinlik = on dummy)
 ayar.B.phiD       = linspace(-0.5, 0.5, 21);   % taranacak vergens [D]
-% calistir = false ise kullanilacak degerler (onceki kosudan):
-ayar.B.egim       = -1.311;          % [mm/D]
-ayar.B.pencere    = [-0.05 0.05];    % [D]
-ayar.B.pencereAlt = true;            % true: pencere tarama sinirina dayanmisti (gercek pencere daha genis)
+% calistir = false iken: Parca 1 her kosuda sonucunu <cikti>_parca1.mat dosyasina kaydeder,
+% kod onu okur. Elle deger vermek istersen asagidakileri doldur (bos = .mat dosyasindan oku):
+ayar.B.egim       = [];     % [mm/D]
+ayar.B.pencere    = [];     % [D], ornek [-0.10 0.10]
+ayar.B.pencereAlt = false;  % true: pencere tarama sinirina dayanmisti
 
 % ---------- PARCA 2: Dosya A (Monte Carlo dosyalari) ----------
 ayar.A.calistir   = true;
@@ -51,7 +53,6 @@ ayar.A.mcOnek     = 'MC_T';    % Zemax'in kaydettigi MC dosyalarinin on eki
 ayar.A.kompOnSurf = 0;         % 0 = otomatik (TDE'deki COMP operandinin yuzeyi)
 
 % "Yol olarak kopyala" ile gelen cift tirnaklari temizle
-ayar.B.dosya = strtrim(strrep(ayar.B.dosya, '"', ''));
 ayar.A.dosya = strtrim(strrep(ayar.A.dosya, '"', ''));
 ayar.A.mcKlasor = strtrim(strrep(ayar.A.mcKlasor, '"', ''));
 if ayar.B.calistir && ~isfile(ayar.B.dosya), error('Dosya B bulunamadi: %s', ayar.B.dosya); end
@@ -151,6 +152,8 @@ if ayar.B.calistir
         T1.(sprintf('MTFn_S_alan%d', a)) = nS(:,a);
     end
     writetable(T1, [ayar.cikti '_parca1.csv']);
+    kaynakDosya = ayar.B.dosya;
+    save([ayar.cikti '_parca1.mat'], 'egim', 'pencere', 'pencereAlt', 'kaynakDosya');
 
     figure('Name', 'Parca 1 - Kompanzator hareketi');
     plot(phiD, dzB, 'o-', 'LineWidth', 1.5); hold on; grid on;
@@ -170,7 +173,21 @@ if ayar.B.calistir
     title(sprintf('Kapasite: kompanzasyon sonrasi MTF @ %.3f %s', fNyq, birim));
     legend('Location', 'bestoutside');
 else
-    egim = ayar.B.egim;  pencere = ayar.B.pencere;  pencereAlt = ayar.B.pencereAlt;
+    if ~isempty(ayar.B.egim) && ~isempty(ayar.B.pencere)
+        egim = ayar.B.egim;  pencere = ayar.B.pencere;  pencereAlt = ayar.B.pencereAlt;
+    else
+        matDosya = [ayar.cikti '_parca1.mat'];
+        if ~isfile(matDosya)
+            error(['Parca 1 atlandi ama %s yok. Bu tasarim icin once ayar.B.calistir = true ile calistir ' ...
+                   '(ya da ayar.B.egim / ayar.B.pencere''yi elle doldur).'], matDosya);
+        end
+        k1 = load(matDosya);
+        egim = k1.egim;  pencere = k1.pencere;  pencereAlt = k1.pencereAlt;
+        fprintf('\nParca 1 sonucu okundu: %s (kaynak: %s)\n', matDosya, k1.kaynakDosya);
+        if ~strcmpi(k1.kaynakDosya, ayar.B.dosya)
+            warning('Kayitli sonuc baska bir Dosya B''den: %s. Farkli tasarimsa Parca 1''i tekrar calistir.', k1.kaynakDosya);
+        end
+    end
     fprintf('\nParca 1 atlandi. Egim = %.4f mm/D, pencere = [%+.4f %+.4f] D\n', egim, pencere);
 end
 
