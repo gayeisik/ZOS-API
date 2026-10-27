@@ -4,7 +4,7 @@ close all;
 
 %% User settings
 filePrefix    = 'MC_T';           % only files starting with this are used
-pixelPitch_um = 12;               % detector pixel pitch (um)
+pixelPitch_um = 15;               % detector pixel pitch (um)
 nFreqPoints   = 100;              % number of frequency steps from 0 to maxFreq
 yieldLevels   = [50 80 90 95];    % yield levels (%)
 % FFT MTF sample size is set in the "Compute MTF" section (S_64x64 by default)
