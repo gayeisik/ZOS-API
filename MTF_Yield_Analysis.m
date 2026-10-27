@@ -80,8 +80,8 @@ onAxisField = 1;
 diffT = [];          % diffraction limit (tangential)
 diffS = [];          % diffraction limit (sagittal)
 diffSource = "";
-paraxialEFL = NaN;   % focal length of the paraxial lens added to afocal files (mm)
-nConverted = 0;      % number of afocal MC files converted with a paraxial lens
+paraxialEFL = NaN;   % |EFL| of the nominal file, used for afocal frequency scaling (mm)
+freqScale = 1;       % Zemax frequency -> cyc/mm (1000/|EFL| for afocal files)
 
 fprintf('Computing MTF for %d files...\n', nFiles);
 wb = waitbar(0, 'Computing MTF...', 'Name', 'MTF Analysis');
@@ -107,12 +107,17 @@ try
 
         paraxialEFL = abs(nominalEFL);
         fprintf('Nominal file %s is in afocal mode.\n', nominalName);
-        fprintf('Paraxial lens focal length (|EFL|): %.4f mm\n', paraxialEFL);
+        fprintf('|EFL|: %.4f mm, MTF frequency cyc/mrad -> cyc/mm (x 1000/|EFL|)\n', paraxialEFL);
+
+        % Afocal MTF is in cyc/mrad: nu_mm = nu_mrad * 1000 / |EFL|
+        freqScale = 1000 / paraxialEFL;
     else
         fprintf('Nominal file %s is not in afocal mode.\n', nominalName);
     end
 
     fprintf('Nyquist frequency: %.4f cyc/mm (pixel pitch %.2f um)\n', maxFreq, pixelPitch_um);
+
+    tStart = tic;
 
     for k = 1:nFiles
 
@@ -127,17 +132,10 @@ try
                 error('OpticStudio could not load this file.');
             end
 
-            % Nominal is afocal (so MC files are too): add paraxial lens
-            % before image, switch afocal mode off
-            if nominalAfocal
-                addParaxialFocus(TheSystem, paraxialEFL);
-                nConverted = nConverted + 1;
-            end
-
             % FFT MTF analysis
             mtf = TheSystem.Analyses.New_FftMtf();
             settings = mtf.GetSettings();
-            settings.MaximumFrequency = maxFreq;
+            settings.MaximumFrequency = maxFreq / freqScale;   % cyc/mrad if afocal
             settings.SampleSize = ZOSAPI.Analysis.SampleSizes.S_64x64;
             settings.Wavelength.UseAllWavelengths();
             settings.Field.UseAllFields();
@@ -171,7 +169,7 @@ try
 
             for f = 1:nFields
                 data = dataSeries(fieldIdx(f));
-                [MTF_T(k, :, f), MTF_S(k, :, f)] = readSeries(data, freqGrid);
+                [MTF_T(k, :, f), MTF_S(k, :, f)] = readSeries(data, freqGrid, freqScale);
 
                 if fieldLabels(f) == ""
                     fieldLabels(f) = strtrim(string(char(data.Description)));
@@ -182,7 +180,7 @@ try
             if isempty(diffT)
                 diffIdx = find(isDiff, 1);
                 if ~isempty(diffIdx)
-                    [diffT, diffS] = readSeries(dataSeries(diffIdx), freqGrid);
+                    [diffT, diffS] = readSeries(dataSeries(diffIdx), freqGrid, freqScale);
                     diffSource = "OpticStudio FFT MTF";
                 else
                     diffT = analyticDiffLimit(TheSystem, freqGrid);
@@ -243,7 +241,7 @@ for f = 1:nFields
     end
 end
 
-fprintf('Valid files: %d / %d\n', nValid, nFiles);
+fprintf('Valid files: %d / %d (MTF computation time: %.1f s)\n', nValid, nFiles, toc(tStart));
 
 %% Mean MTF and yield MTF curves
 % Yield Y% MTF = the MTF value that at least Y% of the systems meet or exceed
@@ -389,8 +387,8 @@ end
 
 % Summary page text
 if nominalAfocal
-    afocalText = sprintf(['Yes - paraxial lens (f = %.4f mm) added before image ' ...
-        'in %d MC file(s), afocal mode off'], paraxialEFL, nConverted);
+    afocalText = sprintf(['Yes - MTF computed in cyc/mrad, frequency scaled ' ...
+        'to cyc/mm by 1000/|EFL| (|EFL| = %.4f mm)'], paraxialEFL);
 else
     afocalText = 'No';
 end
@@ -469,13 +467,14 @@ idx = max(1, ceil(yieldPct / 100 * size(data, 1)));
 v = sorted(idx, :);
 end
 
-function [t, s] = readSeries(data, freqGrid)
-% Reads one FFT MTF data series (column 1: tangential, column 2: sagittal)
-% and interpolates it to the common frequency grid.
+function [t, s] = readSeries(data, freqGrid, freqScale)
+% Reads one FFT MTF data series (column 1: tangential, column 2: sagittal),
+% converts its frequencies to cyc/mm (freqScale) and interpolates it to the
+% common frequency grid.
 x = data.XData.Data.double;
 y = data.YData.Data.double;
 
-x = x(:);
+x = x(:) * freqScale;
 if size(y, 1) ~= numel(x)
     y = y.';
 end
@@ -486,23 +485,6 @@ if size(y, 2) > 1
 else
     s = t;
 end
-end
-
-function addParaxialFocus(TheSystem, focalLength)
-% Inserts a paraxial lens before the image surface (focal length and
-% thickness = focalLength) and switches afocal image space off, so the
-% MTF is reported in cyc/mm. The file on disk is not changed.
-lde = TheSystem.LDE;
-imageIdx = lde.NumberOfSurfaces - 1;
-
-lde.InsertNewSurfaceAt(imageIdx);
-surf = lde.GetSurfaceAt(imageIdx);
-surf.ChangeType(surf.GetSurfaceTypeSettings(ZOSAPI.Editors.LDE.SurfaceType.Paraxial));
-surf.GetSurfaceCell(ZOSAPI.Editors.LDE.SurfaceColumn.Par1).DoubleValue = focalLength;
-surf.Thickness = focalLength;
-surf.Comment = 'Paraxial focus (MTF script)';
-
-TheSystem.SystemData.Aperture.AFocalImageSpace = false;
 end
 
 function idx = findOnAxisField(TheSystem)
