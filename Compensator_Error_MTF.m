@@ -16,7 +16,8 @@ nFilesMax     = Inf;                % use only the first N MC files (e.g. 50 for
 %
 % For every MC file and every error d, the compensator thickness is set to
 % (compensated value + d) and (compensated value - d); the worse of the two
-% (lower mean MTF over all fields, T and S, all frequencies) is kept.
+% (lower on-axis MTF: mean of T and S over all frequencies) is kept and the
+% chosen signed error (e.g. +10 or -10 um) is reported.
 
 % Nyquist frequency of the detector, used as the maximum MTF frequency
 maxFreq = 1000 / (2 * pixelPitch_um);   % cyc/mm
@@ -91,7 +92,7 @@ fileNames = string({files.name})';
 status = strings(nFiles, 1);
 MTF_T = [];          % nFiles x nFreq x nFields x nLevels (tangential)
 MTF_S = [];          % nFiles x nFreq x nFields x nLevels (sagittal)
-worstSign = nan(nFiles, nErr);   % +1: +d was worse, -1: -d was worse
+worstSign = nan(nFiles, nErr);   % +1: +d was worse, -1: -d was worse (on-axis MTF)
 compThickness = nan(nFiles, 1);  % compensated thickness of each MC file
 fieldLabels = strings(0, 1);
 nFields = 0;
@@ -213,7 +214,11 @@ try
                 surf.Thickness = t0 - d;
                 [Tm, Sm] = computeMtf(mtf, freqGrid, freqScale);
 
-                if mean([Tp(:); Sp(:)]) <= mean([Tm(:); Sm(:)])
+                % Worse side decided by the on-axis field MTF
+                onAxisPlus = mean([Tp(:, onAxisField); Sp(:, onAxisField)]);
+                onAxisMinus = mean([Tm(:, onAxisField); Sm(:, onAxisField)]);
+
+                if onAxisPlus <= onAxisMinus
                     MTF_T(k, :, :, e + 1) = Tp;
                     MTF_S(k, :, :, e + 1) = Sp;
                     worstSign(k, e) = 1;
@@ -371,7 +376,10 @@ for lev = 1:nLevels
     if lev == 1
         levelName = 'No compensator error';
     else
-        levelName = sprintf('Compensator error \\pm%g \\mum (worse side)', levelErrors_um(lev));
+        e = lev - 1;
+        levelName = sprintf('Compensator error \\pm%g \\mum (applied: +%g in %d files, -%g in %d files)', ...
+            compErrors_um(e), compErrors_um(e), sum(worstSign(valid, e) == 1), ...
+            compErrors_um(e), sum(worstSign(valid, e) == -1));
     end
 
     fig = figure('Name', sprintf('MTF - error %g um', levelErrors_um(lev)), 'Color', 'w', ...
@@ -446,10 +454,10 @@ for lev = 1:nLevels
     writetable(LevelTable, outputFile, 'Sheet', sprintf('Yield%d Err %gum', reportYield, levelErrors_um(lev)));
 end
 
-% Worse side (+1 / -1) for each file and error
+% Applied (worse-side) signed compensator error in um for each file, e.g. +10 or -10
 WorstSide = table(fileNames, compThickness, 'VariableNames', {'FileName', 'CompThickness'});
 for e = 1:nErr
-    WorstSide.(sprintf('Err%gum', compErrors_um(e))) = worstSign(:, e);
+    WorstSide.(sprintf('Err%gum_applied_um', compErrors_um(e))) = worstSign(:, e) * compErrors_um(e);
 end
 WorstSide.Status = status;
 writetable(WorstSide, outputFile, 'Sheet', 'Worse Side');
@@ -494,7 +502,7 @@ else
     afocalText = 'No';
 end
 
-header = sprintf('%-14s%-14s%14s%14s%14s%14s', 'Error (um)', 'Worse +/-', ...
+header = sprintf('%-14s%-22s%14s%14s%14s%14s', 'Error (um)', 'Applied (files)', ...
     'Field Nyq/2', 'Field Nyq', 'Axis Nyq/2', 'Axis Nyq');
 
 report = {
@@ -507,7 +515,7 @@ report = {
     sprintf('Nominal file:      %s', nominalName)
     sprintf('Afocal mode:       %s', afocalText)
     sprintf('Compensator:       thickness of surface %d %s', compSurface, char(compSurfaceComment))
-    sprintf('Errors:            +/- %s um (worse side kept for each file)', strjoin(string(compErrors_um), ', '))
+    sprintf('Errors:            +/- %s um (worse side by on-axis MTF kept for each file)', strjoin(string(compErrors_um), ', '))
     sprintf('Pixel pitch:       %.2f um', pixelPitch_um)
     sprintf('Max frequency:     %.2f cyc/mm (Nyquist)', maxFreq)
     sprintf('Yield levels:      %s %%', strjoin(string(yieldLevels), ', '))
@@ -526,9 +534,10 @@ for lev = 1:nLevels
         sideText = '-';
     else
         e = lev - 1;
-        sideText = sprintf('%d / %d', sum(worstSign(valid, e) == 1), sum(worstSign(valid, e) == -1));
+        sideText = sprintf('+%g: %d, -%g: %d', compErrors_um(e), sum(worstSign(valid, e) == 1), ...
+            compErrors_um(e), sum(worstSign(valid, e) == -1));
     end
-    report{end + 1, 1} = sprintf('%-14g%-14s%14.4f%14.4f%14.4f%14.4f', levelErrors_um(lev), sideText, ...
+    report{end + 1, 1} = sprintf('%-14g%-22s%14.4f%14.4f%14.4f%14.4f', levelErrors_um(lev), sideText, ...
         sensYield(lev, ry, 1), sensYield(lev, ry, 2), sensOnAxis(lev, 1), sensOnAxis(lev, 2)); %#ok<SAGROW>
 end
 
