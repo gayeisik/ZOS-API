@@ -331,14 +331,18 @@ if ~isfolder(outFolder)
     mkdir(outFolder);
 end
 
-%% Plot 1: sensitivity (MTF vs compensator error)
-axPos = {[0.05 0.32 0.42 0.56], [0.54 0.32 0.42 0.56]};   % fixed axes boxes
+%% Plot pages (A4 portrait, two plots per page, every plot the same size)
+plotPos = {[0.12 0.63 0.80 0.27], [0.12 0.20 0.80 0.27]};   % top / bottom plot
 yieldColors = lines(nYield);
+fieldColors = lines(nFields);
+showDiffS = max(abs(diffT - diffS)) > 1e-6;
 
-sensFig = figure('Name', 'Compensator Sensitivity', 'Color', 'w', 'Position', [50 50 1500 750]);
+% Sensitivity page: Nyquist/2 (top) and Nyquist (bottom)
+sensFig = newA4Page();
+addPageTitle(sensFig, sprintf('MTF – kompanzatör hatası hassasiyeti (%d dosya)', nValid));
 
 for q = 1:2
-    ax = axes(sensFig, 'Position', axPos{q});
+    ax = axes(sensFig, 'Position', plotPos{q}, 'FontSize', 9);
     hold on;
     for y = 1:nYield
         plot(levelErrors_um, sensYield(:, y, q), '-o', 'Color', yieldColors(y, :), ...
@@ -356,40 +360,30 @@ for q = 1:2
     grid on;
     box on;
     pbaspect(ax, [1.6 1 1]);
-
-    lgd = legend(ax, 'NumColumns', 5, 'Location', 'none');
-    lgd.Units = 'normalized';
-    lp = lgd.Position;
-    lgd.Position = [axPos{q}(1) + (axPos{q}(3) - lp(3)) / 2, 0.24 - lp(4), lp(3), lp(4)];
+    placeLegend(ax, plotPos{q}, 5);
 end
 
-sgtitle(sprintf('MTF vs compensator error - %d files', nValid));
-exportPng(sensFig, fullfile(outFolder, 'Compensator_Sensitivity.png'));
-
-%% Plots 2..: report-yield MTF for each error level (left: all fields, right: on-axis)
-% Solid: tangential, dashed: sagittal, black: diffraction limit
-fieldColors = lines(nFields);
-showDiffS = max(abs(diffT - diffS)) > 1e-6;
+% One page per error level: all fields (top), on-axis field (bottom)
 levelFigs = gobjects(nLevels, 1);
 
 for lev = 1:nLevels
     if lev == 1
-        levelName = 'No compensator error';
+        levelName = 'Kompanzatör hatası yok (0 µm)';
     else
         e = lev - 1;
-        levelName = sprintf('Compensator error \\pm%g \\mum (applied: +%g in %d files, -%g in %d files)', ...
+        levelName = sprintf('Kompanzatör hatası ±%g µm (uygulanan: +%g → %d dosya, −%g → %d dosya)', ...
             compErrors_um(e), compErrors_um(e), sum(worstSign(valid, e) == 1), ...
             compErrors_um(e), sum(worstSign(valid, e) == -1));
     end
 
-    fig = figure('Name', sprintf('MTF - error %g um', levelErrors_um(lev)), 'Color', 'w', ...
-        'Position', [50 50 1500 750]);
+    fig = newA4Page();
+    addPageTitle(fig, sprintf('%d%% yield MTF – %s', reportYield, levelName));
 
     panels = {1:nFields, onAxisField};
     panelTitles = ["All fields", "On-axis field: " + fieldLabels(onAxisField)];
 
     for p = 1:2
-        ax = axes(fig, 'Position', axPos{p});
+        ax = axes(fig, 'Position', plotPos{p}, 'FontSize', 9);
         hold on;
         plot(freqGrid, diffT, 'k-', 'LineWidth', 1.5, 'DisplayName', 'Diff. limit');
         if showDiffS
@@ -410,19 +404,10 @@ for lev = 1:nLevels
         grid on;
         box on;
         pbaspect(ax, [1.6 1 1]);
-
-        lgd = legend(ax, 'NumColumns', 6, 'Location', 'none');
-        lgd.Units = 'normalized';
-        lp = lgd.Position;
-        lgd.Position = [axPos{p}(1) + (axPos{p}(3) - lp(3)) / 2, 0.24 - lp(4), lp(3), lp(4)];
+        placeLegend(ax, plotPos{p}, 6);
     end
 
-    sgtitle(sprintf('Polychromatic FFT MTF - %d%% yield - %s (%d files)', ...
-        reportYield, levelName, nValid));
     levelFigs(lev) = fig;
-
-    exportPng(fig, fullfile(outFolder, sprintf('MTF_Yield%d_CompError_%gum.png', ...
-        reportYield, levelErrors_um(lev))));
 end
 
 %% Export Excel
@@ -475,7 +460,7 @@ save(fullfile(outFolder, 'Compensator_RawData.mat'), 'freqGrid', 'MTF_T', 'MTF_S
     'fileNames', 'status', 'fieldLabels', 'yieldLevels', 'pixelPitch_um', 'maxFreq', ...
     'nominalName', 'nominalAfocal', 'paraxialEFL');
 
-%% PDF report: summary page + sensitivity page + one page per error level
+%% PDF report (A4): summary, explanation pages, sensitivity page, one page per error level
 pdfFile = fullfile(outFolder, 'Compensator_Report.pdf');
 
 % Remove old report files (single and per-page)
@@ -494,92 +479,204 @@ if isfile(pdfFile)
     fprintf('\nCompensator_Report.pdf is open in another program; new report: %s\n', pdfFile);
 end
 
-% Summary page text
+errListText = strjoin(string(compErrors_um), ', ');
+
 if nominalAfocal
-    afocalText = sprintf(['Yes - MTF computed in cyc/mrad, frequency scaled ' ...
-        'to cyc/mm by 1000/|EFL| (|EFL| = %.4f mm)'], paraxialEFL);
+    afocalText = sprintf('Evet – MTF cyc/mrad olarak hesaplandı, 1000/|EFL| ile cyc/mm''ye çevrildi (|EFL| = %.4f mm)', paraxialEFL);
+    afocalExplain = sprintf(['Bu analizde nominal dosya afokal moddadır: |EFL| = %.4f mm, ' ...
+        'ölçek katsayısı 1000/|EFL| = %.4f.'], paraxialEFL, freqScale);
 else
-    afocalText = 'No';
+    afocalText = 'Hayır';
+    afocalExplain = 'Bu analizde nominal dosya afokal modda değildir; MTF doğrudan cyc/mm olarak alınır.';
 end
 
-header = sprintf('%-14s%-22s%14s%14s%14s%14s', 'Error (um)', 'Applied (files)', ...
-    'Field Nyq/2', 'Field Nyq', 'Axis Nyq/2', 'Axis Nyq');
-
-report = {
-    'COMPENSATOR ERROR - MTF ANALYSIS REPORT'
+% --- Page: summary -------------------------------------------------------
+summaryLines = {
+    sprintf('Tarih:               %s', char(datetime('now', 'Format', 'dd.MM.yyyy HH:mm')))
+    sprintf('Klasör:              %s', folderPath)
+    sprintf('Nominal dosya:       %s', nominalName)
+    sprintf('MC dosyaları:        %s*  (geçerli: %d / %d)', filePrefix, nValid, nFiles)
+    sprintf('Afokal mod:          %s', afocalText)
+    sprintf('Kompanzatör:         yüzey %d kalınlığı %s', compSurface, char(compSurfaceComment))
+    sprintf('Kompanzatör hatası:  ±%s µm', errListText)
+    sprintf('Piksel aralığı:      %.2f µm', pixelPitch_um)
+    sprintf('Nyquist frekansı:    %.2f cyc/mm  (Nyquist/2 = %.2f cyc/mm)', maxFreq, maxFreq / 2)
+    sprintf('Yield seviyeleri:    %s %%', strjoin(string(yieldLevels), ', '))
+    'MTF tipi:            Polikromatik FFT MTF (tüm dalga boyları, tüm fieldler)'
+    sprintf('Diffraction limit:   %s', char(diffSource))
     ''
-    sprintf('Date:              %s', char(datetime('now', 'Format', 'dd.MM.yyyy HH:mm')))
-    sprintf('Folder:            %s', folderPath)
-    sprintf('File prefix:       %s', filePrefix)
-    sprintf('Valid files:       %d / %d', nValid, nFiles)
-    sprintf('Nominal file:      %s', nominalName)
-    sprintf('Afocal mode:       %s', afocalText)
-    sprintf('Compensator:       thickness of surface %d %s', compSurface, char(compSurfaceComment))
-    sprintf('Errors:            +/- %s um (worse side by on-axis MTF kept for each file)', strjoin(string(compErrors_um), ', '))
-    sprintf('Pixel pitch:       %.2f um', pixelPitch_um)
-    sprintf('Max frequency:     %.2f cyc/mm (Nyquist)', maxFreq)
-    sprintf('Yield levels:      %s %%', strjoin(string(yieldLevels), ', '))
-    'MTF type:          Polychromatic FFT MTF (all wavelengths, all fields)'
-    sprintf('Diffraction limit: %s', char(diffSource))
-    sprintf('Yield X%% = MTF value that at least X%% of the systems meet or exceed')
+    sprintf('%d%% YIELD MTF ÖZETİ', reportYield)
+    'Field: en kötü field ve en kötü yön (T/S)    Axis: on-axis field, T/S''nin kötüsü'
     ''
-    sprintf('%d%% yield MTF (Field: worst field and T/S, Axis: on-axis field, worse of T/S)', reportYield)
-    ''
-    header
-    repmat('-', 1, numel(header))
     };
+
+header = sprintf('%-10s%-26s%11s%11s%11s%11s', 'Hata(µm)', 'Uygulanan (dosya sayısı)', ...
+    'Field N/2', 'Field N', 'Axis N/2', 'Axis N');
+summaryLines = [summaryLines; {header; repmat('-', 1, numel(header))}];
 
 for lev = 1:nLevels
     if lev == 1
         sideText = '-';
     else
         e = lev - 1;
-        sideText = sprintf('+%g: %d, -%g: %d', compErrors_um(e), sum(worstSign(valid, e) == 1), ...
+        sideText = sprintf('+%g: %d   -%g: %d', compErrors_um(e), sum(worstSign(valid, e) == 1), ...
             compErrors_um(e), sum(worstSign(valid, e) == -1));
     end
-    report{end + 1, 1} = sprintf('%-14g%-22s%14.4f%14.4f%14.4f%14.4f', levelErrors_um(lev), sideText, ...
+    summaryLines{end + 1, 1} = sprintf('%-10g%-26s%11.4f%11.4f%11.4f%11.4f', levelErrors_um(lev), sideText, ...
         sensYield(lev, ry, 1), sensYield(lev, ry, 2), sensOnAxis(lev, 1), sensOnAxis(lev, 2)); %#ok<SAGROW>
 end
 
-report = [report; {''; 'Fields (plots: solid = tangential, dashed = sagittal)'}];
-report = [report; cellstr(compose("  F%d: %s", (1:nFields)', fieldLabels))];
+summaryLines = [summaryLines; {''; 'N/2 = Nyquist/2, N = Nyquist'; ''; 'FIELDLER (grafiklerde düz çizgi = T, kesikli çizgi = S)'}];
+summaryLines = [summaryLines; cellstr(compose("  F%d: %s", (1:nFields)', fieldLabels))];
 
 failed = fileNames(~valid);
 if ~isempty(failed)
-    report = [report; {''; sprintf('Failed files (%d):', numel(failed))}];
-    shown = failed(1:min(end, 10));
-    report = [report; cellstr("  " + shown)];
+    summaryLines = [summaryLines; {''; sprintf('Hesaplanamayan dosyalar (%d):', numel(failed))}];
+    shown = failed(1:min(end, 8));
+    summaryLines = [summaryLines; cellstr("  " + shown)];
     if numel(failed) > numel(shown)
-        report{end + 1, 1} = sprintf('  ... and %d more (see Worse Side sheet in Excel)', numel(failed) - numel(shown));
+        summaryLines{end + 1, 1} = sprintf('  ... ve %d dosya daha (Excel, Worse Side sayfası)', numel(failed) - numel(shown));
     end
 end
 
-reportFig = figure('Name', 'Compensator Report', 'Color', 'w', 'Position', [50 50 1200 850]);
-ax = axes(reportFig, 'Position', [0 0 1 1], 'Visible', 'off');
-text(ax, 0.04, 0.97, report, 'VerticalAlignment', 'top', ...
-    'FontName', 'Courier New', 'FontSize', 9, 'Interpreter', 'none');
+summaryFig = textPage('KOMPANZATÖR HATASI – MTF ANALİZ RAPORU', summaryLines, 'Courier New', 8.5);
 
-allFigs = [reportFig; sensFig; levelFigs];
+% --- Explanation pages ---------------------------------------------------
+explain1 = {
+    'AMAÇ'
+    ['Monte Carlo (MC) tolerans analizinde her MC_T dosyası, toleranslar uygulandıktan sonra ' ...
+     'kompanzatör en iyi konuma optimize edilerek kaydedilir. Gerçek sistemde ise kompanzatör bu ' ...
+     'ideal konuma tam olarak getirilemez: motor adımı, mekanik boşluk (backlash), odak ayarındaki ' ...
+     'ölçüm belirsizliği ve ısıl kaymalar küçük bir konumlandırma hatası bırakır. Bu analiz, ' ...
+     'kompanzatör ±δ kadar hatalı konumlandığında MTF''in nasıl değiştiğini gösterir ve kompanzatör ' ...
+     'için izin verilebilecek hata payının belirlenmesini sağlar.']
+    ''
+    'ADIM 1 – NOMİNAL DOSYA'
+    sprintf(['Klasörde adı MC_ ile başlamayan dosya nominal tasarım kabul edilir (bu analizde: %s). ' ...
+     'Bu dosyadan şunlar okunur:'], nominalName)
+    ['•  Afokal mod: Sistem "Afocal Image Space" modundaysa Zemax MTF''i açısal frekansta (cyc/mrad) ' ...
+     'verir. Bu durumda |EFL| okunur ve frekanslar  ν[cyc/mm] = ν[cyc/mrad] × 1000 / |EFL|  ile ' ...
+     'cyc/mm''ye çevrilir. MTF değerleri değişmez, sadece frekans ekseni ölçeklenir. ' afocalExplain]
+    sprintf(['•  Kompanzatör: Tolerans editöründeki COMP satırından okunan yüzeyin kalınlığıdır ' ...
+     '(bu analizde: yüzey %d).'], compSurface)
+    '•  On-axis field: Koordinatı (0, 0) olan fielddir.'
+    ''
+    'ADIM 2 – REFERANS MTF (0 µm)'
+    sprintf(['Her MC_T dosyası kaydedildiği (kompanze edilmiş) haliyle açılır ve polikromatik FFT MTF ' ...
+     'hesaplanır: tüm dalga boyları, tüm fieldler, tanjansiyel (T) ve sajital (S) ayrı ayrı, 0''dan ' ...
+     'Nyquist frekansına (%.2f cyc/mm) kadar. Bu sonuç "0 µm" referansıdır ve kompanzatör hatası ' ...
+     'olmayan durumu gösterir.'], maxFreq)
+    ''
+    'ADIM 3 – KOMPANZATÖR HATASI (±δ)'
+    sprintf(['Her hata payı δ (%s µm) için kompanzatör kalınlığı önce +δ, sonra −δ kaydırılır ve her iki ' ...
+     'durumda MTF yeniden hesaplanır. İki sonuçtan on-axis fieldin ortalama MTF''i (T ve S, tüm ' ...
+     'frekanslar) daha düşük olan taraf "kötü taraf" kabul edilir ve o dosya için bu sonuç ' ...
+     'kullanılır. Böylece her dosyada en kötü durum (worst case) alınmış olur.'], errListText)
+    ['Her dosyada hangi tarafın (+δ veya −δ) uygulandığı Excel''deki "Worse Side" sayfasında, toplam ' ...
+     'dosya sayıları ise özet tablosunda ve her MTF sayfasının başlığında verilir.']
+    ['Not: Kötü taraf on-axis fielde göre seçildiği için bazı kenar fieldlerde diğer taraf daha kötü ' ...
+     'olabilir. Hesaptan sonra kompanzatör dosyanın kendi değerine geri alınır; diskteki dosyalar ' ...
+     'değiştirilmez.']
+    ''
+    'ADIM 4 – İSTATİSTİK: ORTALAMA VE YIELD MTF'
+    'Her hata payı için tüm geçerli dosyaların MTF''leri her frekansta ayrı ayrı istatistiğe sokulur:'
+    '•  Ortalama MTF: Dosyaların MTF değerlerinin ortalaması.'
+    ['•  Yield %X MTF: Dosyaların en az %X''inin sağladığı (bu değere eşit veya üstünde kalan) MTF ' ...
+     'değeri. Örneğin 200 dosyada %90 yield MTF = 0.25 ise sistemlerin en az 180''inin MTF''i 0.25 ' ...
+     'veya üstündedir. Üretim açısından "sistemlerin %90''ı en az bu performansı verir" anlamına gelir.']
+    ['Önemli: Yield eğrisi her frekansta ayrı hesaplanır. Bu yüzden %90 yield eğrisi tek bir gerçek ' ...
+     'sistemin MTF eğrisi değildir; her frekanstaki alt sınırların birleşimidir.']
+    };
+
+explain2 = {
+    'NYQUIST FREKANSI NEDİR?'
+    sprintf(['Nyquist frekansı, dedektörün örnekleyebileceği en yüksek uzaysal frekanstır:  ' ...
+     'ν_N = 1 / (2 × piksel aralığı). Bir çizgi çifti (bir açık + bir koyu çizgi) iki piksele denk ' ...
+     'gelir. Bu analizde piksel aralığı %.2f µm olduğu için Nyquist = %.2f cyc/mm''dir. Nyquist''in ' ...
+     'üzerindeki detaylar dedektör tarafından doğru örneklenemez (aliasing); bu yüzden MTF yalnızca ' ...
+     'Nyquist''e kadar hesaplanır.'], pixelPitch_um, maxFreq)
+    ['•  Nyquist''teki MTF: Sistemin, dedektörün çözebileceği en ince detayı ne kadar kontrastla ' ...
+     'ilettiğini gösterir. Küçük hedeflerin ve ince çizgilerin seçilebilirliği buna bağlıdır.']
+    ['•  Nyquist/2''deki MTF: Orta frekanslardaki kontrastı, yani görüntünün genel keskinliğini ve ' ...
+     'algılanan netliğini temsil eder.']
+    ['Kompanzatör hatası esas olarak odak kayması (defocus) üretir. Defocus yüksek frekansları daha çok ' ...
+     'etkilediği için Nyquist''teki MTF genellikle Nyquist/2''dekinden daha hızlı düşer.']
+    ''
+    'HASSASİYET GRAFİĞİ (MTF – KOMPANZATÖR HATASI) NASIL OKUNUR?'
+    '•  Yatay eksen: kompanzatör hatası (µm). 0 µm noktası hatasız MC sonucudur.'
+    ['•  Dikey eksen: en kötü field ve en kötü yöndeki (T veya S) MTF. Her noktada tüm fieldler ' ...
+     'arasındaki en düşük değer gösterilir; bu tutucu (güvenli tarafta kalan) bir değerdir.']
+    sprintf(['•  Renkli çizgiler: yield seviyeleri (%s %%). %%50 medyan sistemi, yüksek yield ise ' ...
+     'neredeyse tüm sistemleri temsil eder; yüksek yield eğrisi her zaman daha alttadır. Siyah kesikli ' ...
+     'çizgi ortalama MTF''tir.'], strjoin(string(yieldLevels), ', '))
+    '•  Üstteki grafik Nyquist/2''de, alttaki grafik Nyquist''te hesaplanmıştır.'
+    ['Eğri ne kadar dik düşüyorsa sistem kompanzatör hatasına o kadar hassastır. Eğri başta yataya ' ...
+     'yakın kalıp sonra düşüyorsa, yatay bölge sistemin odak derinliği içinde kalınan bölgedir; bu ' ...
+     'bölgedeki hatalar MTF''i belirgin şekilde etkilemez.']
+    };
+
+explain3 = {
+    'KOMPANZATÖR HATA PAYI NASIL BELİRLENİR?'
+    '1.  MTF şartını belirle, örneğin: "%90 yield''de Nyquist''te MTF ≥ 0.15".'
+    ['2.  Hassasiyet grafiğinde bu MTF değerinde yatay bir çizgi düşün ve ilgili yield eğrisinin bu ' ...
+     'çizginin altına indiği noktayı bul. Bu noktadaki hata, izin verilebilecek en büyük kompanzatör ' ...
+     'hatasıdır. Noktalar arasında doğrusal değişim kabul edilebilir.']
+    ['3.  Güvenlik payı bırak: bulunan değerin biraz altını spesifikasyon olarak seç (diğer hata ' ...
+     'kaynakları ve modelleme belirsizlikleri için).']
+    ['4.  Bu değeri mekanizmanın gerçek kabiliyetiyle (motor adımı, boşluk, odak ayarı hassasiyeti, ' ...
+     'sıcaklık) karşılaştır. Mekanizma bu hassasiyeti sağlayamıyorsa mekanizma ya da optik tasarım ' ...
+     '(odak derinliği) iyileştirilmelidir.']
+    ''
+    'MTF EĞRİSİ SAYFALARI NASIL OKUNUR?'
+    sprintf(['Her hata payı için bir sayfa vardır. Üstteki grafik tüm fieldlerin, alttaki grafik ' ...
+     'on-axis fieldin %d%% yield MTF eğrisini gösterir. Düz çizgi tanjansiyel (T), kesikli çizgi ' ...
+     'sajital (S); siyah çizgi diffraction limit, yani aberasyonsuz ideal sistemin teorik üst ' ...
+     'sınırıdır. Eğriler diffraction limitine ne kadar yakınsa performans o kadar iyidir.'], reportYield)
+    ['Hata payı arttıkça eğrilerin aşağı inmesi beklenir. Aynı fieldde T ve S eğrilerinin birbirinden ' ...
+     'ayrılması astigmatizma / field curvature etkisini gösterir. Sayfa başlığında, o hata payında ' ...
+     'kaç dosyaya +δ ve kaç dosyaya −δ uygulandığı yazar.']
+    };
+
+explainFig1 = textPage('1. ANALİZ YÖNTEMİ', explain1, 'Arial', 10);
+explainFig2 = textPage('2. NYQUIST FREKANSI VE HASSASİYET GRAFİĞİ', explain2, 'Arial', 10);
+explainFig3 = textPage('3. HATA PAYININ BELİRLENMESİ VE MTF SAYFALARI', explain3, 'Arial', 10);
+
+% --- Assemble pages: frame, header and page numbers ----------------------
+allFigs = [summaryFig; explainFig1; explainFig2; explainFig3; sensFig; levelFigs];
+nPages = numel(allFigs);
+headerText = sprintf('Kompanzatör Hatası – MTF Analizi  |  %s', nominalName);
+
+for p = 1:nPages
+    addPageFrame(allFigs(p), headerText, p, nPages);
+end
+
+% PNG of the plot pages
+exportPng(sensFig, fullfile(outFolder, 'Compensator_Sensitivity.png'));
+for lev = 1:nLevels
+    exportPng(levelFigs(lev), fullfile(outFolder, sprintf('MTF_Yield%d_CompError_%gum.png', ...
+        reportYield, levelErrors_um(lev))));
+end
 
 try
     % Multi-page PDF (exportgraphics with 'Append' needs R2021b+)
     exportgraphics(allFigs(1), pdfFile, 'ContentType', 'vector');
-    for p = 2:numel(allFigs)
+    for p = 2:nPages
         exportgraphics(allFigs(p), pdfFile, 'ContentType', 'vector', 'Append', true);
     end
     fprintf('\nPDF report saved to:\n%s\n', pdfFile);
 catch pdfErr
-    % Older MATLAB: one PDF file per page
+    % Older MATLAB: one A4 PDF file per page
     fprintf('\nMulti-page PDF export failed: %s\n', pdfErr.message);
     if isfile(pdfFile)
         delete(pdfFile);
     end
-    for p = 1:numel(allFigs)
-        set(allFigs(p), 'PaperOrientation', 'landscape', 'PaperPositionMode', 'auto');
-        print(allFigs(p), fullfile(outFolder, sprintf('Compensator_Report_page%d.pdf', p)), '-dpdf', '-bestfit');
+    for p = 1:nPages
+        print(allFigs(p), fullfile(outFolder, sprintf('Compensator_Report_page%d.pdf', p)), '-dpdf');
     end
     fprintf('Report saved as separate pages (Compensator_Report_page*.pdf).\n');
 end
+
+close(allFigs);
 
 fprintf('\nResults saved to:\n%s\n', outFolder);
 
@@ -690,6 +787,56 @@ try
 catch
     saveas(fig, imageFile);
 end
+end
+
+function fig = newA4Page()
+% Blank A4 portrait page (21 x 29.7 cm). Invisible, so its size is not
+% limited by the screen.
+fig = figure('Visible', 'off', 'Color', 'w', 'Units', 'centimeters', ...
+    'Position', [1 1 21 29.7], 'PaperUnits', 'centimeters', ...
+    'PaperSize', [21 29.7], 'PaperPosition', [0 0 21 29.7]);
+end
+
+function addPageTitle(fig, titleText)
+annotation(fig, 'textbox', [0.06 0.915 0.88 0.04], 'String', titleText, ...
+    'FontSize', 11, 'FontWeight', 'bold', 'HorizontalAlignment', 'center', ...
+    'VerticalAlignment', 'middle', 'EdgeColor', 'none', 'Interpreter', 'none');
+end
+
+function fig = textPage(titleText, lines, fontName, fontSize)
+% A4 page with a title and wrapped text (one cell per paragraph/line)
+fig = newA4Page();
+annotation(fig, 'textbox', [0.08 0.89 0.84 0.05], 'String', titleText, ...
+    'FontSize', 14, 'FontWeight', 'bold', 'EdgeColor', 'none', ...
+    'Interpreter', 'none', 'VerticalAlignment', 'top');
+annotation(fig, 'textbox', [0.08 0.06 0.84 0.83], 'String', lines, ...
+    'FontName', fontName, 'FontSize', fontSize, 'EdgeColor', 'none', ...
+    'Interpreter', 'none', 'VerticalAlignment', 'top', 'FitBoxToText', 'off');
+end
+
+function placeLegend(ax, axPos, nCols)
+% Legend centred below the axes; placed manually so it does not resize the axes
+lgd = legend(ax, 'NumColumns', nCols, 'Location', 'none', 'FontSize', 8);
+lgd.Units = 'normalized';
+lp = lgd.Position;
+lgd.Position = [axPos(1) + (axPos(3) - lp(3)) / 2, axPos(2) - 0.045 - lp(4), lp(3), lp(4)];
+end
+
+function addPageFrame(fig, headerText, pageNo, nPages)
+% Header, footer with page number and an almost-white page border. The
+% border keeps the whole A4 page when exportgraphics crops to the content.
+ax = axes(fig, 'Position', [0 0 1 1], 'Visible', 'off', 'XLim', [0 1], 'YLim', [0 1]);
+hold(ax, 'on');
+plot(ax, [0.001 0.999 0.999 0.001 0.001], [0.001 0.001 0.999 0.999 0.001], ...
+    '-', 'Color', [0.995 0.995 0.995], 'LineWidth', 0.5);
+plot(ax, [0.06 0.94], [0.965 0.965], '-', 'Color', [0.6 0.6 0.6], 'LineWidth', 0.5);
+plot(ax, [0.06 0.94], [0.035 0.035], '-', 'Color', [0.6 0.6 0.6], 'LineWidth', 0.5);
+text(ax, 0.06, 0.970, headerText, 'FontSize', 8, 'Color', [0.4 0.4 0.4], ...
+    'VerticalAlignment', 'bottom', 'Interpreter', 'none');
+text(ax, 0.94, 0.030, sprintf('Sayfa %d / %d', pageNo, nPages), 'FontSize', 8, ...
+    'Color', [0.4 0.4 0.4], 'HorizontalAlignment', 'right', 'VerticalAlignment', 'top', ...
+    'Interpreter', 'none');
+hold(ax, 'off');
 end
 
 function idx = findOnAxisField(TheSystem)
