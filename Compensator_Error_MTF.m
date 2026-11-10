@@ -781,8 +781,8 @@ function setCompensator(TheSystem, surfNo, mceRow, value)
 % property assignment written on a method call chain (obj.Method(x).Prop = v).
 if mceRow > 0
     mce = TheSystem.MCE;
-    cell = mce.GetOperandAt(mceRow).GetOperandCell(mce.CurrentConfiguration);
-    cell.DoubleValue = value;
+    compCell = mce.GetOperandAt(mceRow).GetOperandCell(mce.CurrentConfiguration);
+    compCell.DoubleValue = value;
 else
     surf = TheSystem.LDE.GetSurfaceAt(surfNo);
     surf.Thickness = value;
