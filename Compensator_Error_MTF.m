@@ -101,6 +101,8 @@ diffS = [];
 diffSource = "";
 paraxialEFL = NaN;
 freqScale = 1;       % Zemax frequency -> cyc/mm (1000/|EFL| for afocal files)
+checkPrinted = false;   % check output is printed for the first valid file only
+maxChange = 0;          % largest MTF change caused by the errors in that file
 
 fprintf('Computing MTF for %d files x %d compensator errors (+/-)...\n', nFiles, nErr);
 wb = waitbar(0, 'Computing MTF...', 'Name', 'Compensator Error Analysis');
@@ -136,10 +138,14 @@ try
     end
     compSurfaceComment = string(char(TheSystem.LDE.GetSurfaceAt(compSurface).Comment));
 
+    % Is the thickness set in the Lens Data Editor or by a multi-configuration
+    % THIC operand? (An LDE value controlled by the MCE cannot be changed directly.)
+    [compMceRow, compInfo] = findCompensatorControl(TheSystem, compSurface);
+
     lensUnitsPerMm = unitsPerMm(TheSystem);
     onAxisField = findOnAxisField(TheSystem);
 
-    fprintf('Compensator: thickness of surface %d %s\n', compSurface, compSurfaceComment);
+    fprintf('Compensator: thickness of surface %d %s (%s)\n', compSurface, compSurfaceComment, compInfo);
     fprintf('Nyquist frequency: %.4f cyc/mm (pixel pitch %.2f um)\n', maxFreq, pixelPitch_um);
 
     tStart = tic;
@@ -147,8 +153,6 @@ try
     for k = 1:nFiles
 
         filePath = fullfile(folderPath, files(k).name);
-        mtf = [];
-        surf = [];
 
         try
             % Load optical system
@@ -156,24 +160,11 @@ try
                 error('OpticStudio could not load this file.');
             end
 
-            surf = TheSystem.LDE.GetSurfaceAt(compSurface);
-            t0 = surf.Thickness;
+            t0 = getCompensator(TheSystem, compSurface, compMceRow);
             compThickness(k) = t0;
 
-            % FFT MTF analysis (re-applied after each compensator change)
-            mtf = TheSystem.Analyses.New_FftMtf();
-            settings = mtf.GetSettings();
-            settings.MaximumFrequency = maxFreq / freqScale;   % cyc/mrad if afocal
-            settings.SampleSize = ZOSAPI.Analysis.SampleSizes.S_64x64;
-            settings.Wavelength.UseAllWavelengths();
-            settings.Field.UseAllFields();
-            try
-                settings.ShowDiffractionLimit = isempty(diffT);
-            catch
-            end
-
-            % Level 1: compensated file, no error
-            [T0, S0, labels, dT, dS] = computeMtf(mtf, freqGrid, freqScale);
+            % Level 1: compensated file, no error (no optimization is run anywhere)
+            [T0, S0, labels, dT, dS] = computeMtf(TheSystem, maxFreq, freqGrid, freqScale, isempty(diffT));
 
             % First successful file defines the number of fields
             if nFields == 0
@@ -195,10 +186,6 @@ try
                     diffS = diffT;
                     diffSource = "Analytical (circular aperture, working F/#)";
                 end
-                try
-                    settings.ShowDiffractionLimit = false;
-                catch
-                end
             end
 
             MTF_T(k, :, :, 1) = T0;
@@ -208,11 +195,12 @@ try
             for e = 1:nErr
                 d = compErrors_um(e) / 1000 * lensUnitsPerMm;   % um -> lens units
 
-                surf.Thickness = t0 + d;
-                [Tp, Sp] = computeMtf(mtf, freqGrid, freqScale);
+                % Set the error, check that it was really applied, then compute MTF
+                setCompensator(TheSystem, compSurface, compMceRow, t0 + d);
+                [Tp, Sp] = computeMtf(TheSystem, maxFreq, freqGrid, freqScale, false);
 
-                surf.Thickness = t0 - d;
-                [Tm, Sm] = computeMtf(mtf, freqGrid, freqScale);
+                setCompensator(TheSystem, compSurface, compMceRow, t0 - d);
+                [Tm, Sm] = computeMtf(TheSystem, maxFreq, freqGrid, freqScale, false);
 
                 % Worse side decided by the on-axis field MTF
                 onAxisPlus = mean([Tp(:, onAxisField); Sp(:, onAxisField)]);
@@ -227,9 +215,32 @@ try
                     MTF_S(k, :, :, e + 1) = Sm;
                     worstSign(k, e) = -1;
                 end
+
+                % Check output for the first file: does the MTF react to the error?
+                if ~checkPrinted
+                    if e == 1
+                        fprintf('\nCheck on %s (compensator value %.6f):\n', files(k).name, t0);
+                        fprintf('  on-axis mean MTF without error: %.4f\n', ...
+                            mean([T0(:, onAxisField); S0(:, onAxisField)]));
+                    end
+                    fprintf('  +%g um: %.4f   -%g um: %.4f   -> applied %+g um\n', ...
+                        compErrors_um(e), onAxisPlus, compErrors_um(e), onAxisMinus, ...
+                        worstSign(k, e) * compErrors_um(e));
+                    maxChange = max(maxChange, max(abs([Tp(:) - T0(:); Tm(:) - T0(:)])));
+                end
             end
 
-            surf.Thickness = t0;
+            if ~checkPrinted
+                checkPrinted = true;
+                if maxChange < 1e-6
+                    warning(['The MTF did not change when the compensator thickness was changed. ' ...
+                        'Surface %d is probably not the real compensator, or its thickness has no ' ...
+                        'effect (e.g. it is in collimated space). Check compSurface.'], compSurface);
+                end
+                fprintf('\n');
+            end
+
+            setCompensator(TheSystem, compSurface, compMceRow, t0);
 
             if any(isnan(MTF_T(k, :, :, :)), 'all') || any(isnan(MTF_S(k, :, :, :)), 'all')
                 error('MTF data contains invalid values.');
@@ -240,10 +251,6 @@ try
         catch ME
             status(k) = string(ME.message);
             fprintf('ERROR: %s - %s\n', files(k).name, ME.message);
-        end
-
-        if ~isempty(mtf)
-            mtf.Close();
         end
 
         if isvalid(wb)
@@ -333,35 +340,8 @@ end
 
 %% Plot pages (A4 portrait, two plots per page, every plot the same size)
 plotPos = {[0.12 0.63 0.80 0.27], [0.12 0.20 0.80 0.27]};   % top / bottom plot
-yieldColors = lines(nYield);
 fieldColors = lines(nFields);
 showDiffS = max(abs(diffT - diffS)) > 1e-6;
-
-% Sensitivity page: Nyquist/2 (top) and Nyquist (bottom)
-sensFig = newA4Page();
-addPageTitle(sensFig, sprintf('MTF – kompanzatör hatası hassasiyeti (%d dosya)', nValid));
-
-for q = 1:2
-    ax = axes(sensFig, 'Position', plotPos{q}, 'FontSize', 9);
-    hold on;
-    for y = 1:nYield
-        plot(levelErrors_um, sensYield(:, y, q), '-o', 'Color', yieldColors(y, :), ...
-            'LineWidth', 1.5, 'MarkerFaceColor', yieldColors(y, :), ...
-            'DisplayName', sprintf('%d%% yield', yieldLevels(y)));
-    end
-    plot(levelErrors_um, sensMean(:, q), 'k--s', 'LineWidth', 1.5, 'DisplayName', 'Mean');
-    hold off;
-    xlim([0 max(levelErrors_um)]);
-    ylim([0 1]);
-    xticks(levelErrors_um);
-    xlabel('Compensator error (\pm\mum, worse side)');
-    ylabel('MTF (worst field, T/S)');
-    title(sprintf('%s (%.2f cyc/mm)', keyNames(q), freqGrid(keyIdx(q))));
-    grid on;
-    box on;
-    pbaspect(ax, [1.6 1 1]);
-    placeLegend(ax, plotPos{q}, 5);
-end
 
 % One page per error level: all fields (top), on-axis field (bottom)
 levelFigs = gobjects(nLevels, 1);
@@ -460,7 +440,7 @@ save(fullfile(outFolder, 'Compensator_RawData.mat'), 'freqGrid', 'MTF_T', 'MTF_S
     'fileNames', 'status', 'fieldLabels', 'yieldLevels', 'pixelPitch_um', 'maxFreq', ...
     'nominalName', 'nominalAfocal', 'paraxialEFL');
 
-%% PDF report (A4): summary, explanation pages, sensitivity page, one page per error level
+%% PDF report (A4): summary, explanation pages, one MTF page per error level
 pdfFile = fullfile(outFolder, 'Compensator_Report.pdf');
 
 % Remove old report files (single and per-page)
@@ -574,6 +554,8 @@ explain1 = {
      'kullanılır. Böylece her dosyada en kötü durum (worst case) alınmış olur.'], errListText)
     ['Her dosyada hangi tarafın (+δ veya −δ) uygulandığı Excel''deki "Worse Side" sayfasında, toplam ' ...
      'dosya sayıları ise özet tablosunda ve her MTF sayfasının başlığında verilir.']
+    ['Hata eklendikten sonra hiçbir optimizasyon yapılmaz; MTF doğrudan hatalı kompanzatör konumunda ' ...
+     'hesaplanır. Kod her değişiklikten sonra değerin sisteme gerçekten uygulandığını kontrol eder.']
     ['Not: Kötü taraf on-axis fielde göre seçildiği için bazı kenar fieldlerde diğer taraf daha kötü ' ...
      'olabilir. Hesaptan sonra kompanzatör dosyanın kendi değerine geri alınır; diskteki dosyalar ' ...
      'değiştirilmez.']
@@ -602,25 +584,11 @@ explain2 = {
     ['Kompanzatör hatası esas olarak odak kayması (defocus) üretir. Defocus yüksek frekansları daha çok ' ...
      'etkilediği için Nyquist''teki MTF genellikle Nyquist/2''dekinden daha hızlı düşer.']
     ''
-    'HASSASİYET GRAFİĞİ (MTF – KOMPANZATÖR HATASI) NASIL OKUNUR?'
-    '•  Yatay eksen: kompanzatör hatası (µm). 0 µm noktası hatasız MC sonucudur.'
-    ['•  Dikey eksen: en kötü field ve en kötü yöndeki (T veya S) MTF. Her noktada tüm fieldler ' ...
-     'arasındaki en düşük değer gösterilir; bu tutucu (güvenli tarafta kalan) bir değerdir.']
-    sprintf(['•  Renkli çizgiler: yield seviyeleri (%s %%). %%50 medyan sistemi, yüksek yield ise ' ...
-     'neredeyse tüm sistemleri temsil eder; yüksek yield eğrisi her zaman daha alttadır. Siyah kesikli ' ...
-     'çizgi ortalama MTF''tir.'], strjoin(string(yieldLevels), ', '))
-    '•  Üstteki grafik Nyquist/2''de, alttaki grafik Nyquist''te hesaplanmıştır.'
-    ['Eğri ne kadar dik düşüyorsa sistem kompanzatör hatasına o kadar hassastır. Eğri başta yataya ' ...
-     'yakın kalıp sonra düşüyorsa, yatay bölge sistemin odak derinliği içinde kalınan bölgedir; bu ' ...
-     'bölgedeki hatalar MTF''i belirgin şekilde etkilemez.']
-    };
-
-explain3 = {
     'KOMPANZATÖR HATA PAYI NASIL BELİRLENİR?'
     '1.  MTF şartını belirle, örneğin: "%90 yield''de Nyquist''te MTF ≥ 0.15".'
-    ['2.  Hassasiyet grafiğinde bu MTF değerinde yatay bir çizgi düşün ve ilgili yield eğrisinin bu ' ...
-     'çizginin altına indiği noktayı bul. Bu noktadaki hata, izin verilebilecek en büyük kompanzatör ' ...
-     'hatasıdır. Noktalar arasında doğrusal değişim kabul edilebilir.']
+    ['2.  Özet sayfasındaki tabloda ve MTF sayfalarında, hata payı büyüdükçe MTF''in bu şartın altına ' ...
+     'indiği ilk hata payını bul. Şartı hâlâ sağlayan en büyük hata payı, izin verilebilecek en büyük ' ...
+     'kompanzatör hatasıdır. İki hata payı arasında doğrusal değişim kabul edilebilir.']
     ['3.  Güvenlik payı bırak: bulunan değerin biraz altını spesifikasyon olarak seç (diğer hata ' ...
      'kaynakları ve modelleme belirsizlikleri için).']
     ['4.  Bu değeri mekanizmanın gerçek kabiliyetiyle (motor adımı, boşluk, odak ayarı hassasiyeti, ' ...
@@ -638,11 +606,10 @@ explain3 = {
     };
 
 explainFig1 = textPage('1. ANALİZ YÖNTEMİ', explain1, 'Arial', 10);
-explainFig2 = textPage('2. NYQUIST FREKANSI VE HASSASİYET GRAFİĞİ', explain2, 'Arial', 10);
-explainFig3 = textPage('3. HATA PAYININ BELİRLENMESİ VE MTF SAYFALARI', explain3, 'Arial', 10);
+explainFig2 = textPage('2. NYQUIST FREKANSI, HATA PAYI VE MTF SAYFALARI', explain2, 'Arial', 10);
 
 % --- Assemble pages: frame, header and page numbers ----------------------
-allFigs = [summaryFig; explainFig1; explainFig2; explainFig3; sensFig; levelFigs];
+allFigs = [summaryFig; explainFig1; explainFig2; levelFigs];
 nPages = numel(allFigs);
 headerText = sprintf('Kompanzatör Hatası – MTF Analizi  |  %s', nominalName);
 
@@ -651,7 +618,6 @@ for p = 1:nPages
 end
 
 % PNG of the plot pages
-exportPng(sensFig, fullfile(outFolder, 'Compensator_Sensitivity.png'));
 for lev = 1:nLevels
     exportPng(levelFigs(lev), fullfile(outFolder, sprintf('MTF_Yield%d_CompError_%gum.png', ...
         reportYield, levelErrors_um(lev))));
@@ -681,10 +647,24 @@ close(allFigs);
 fprintf('\nResults saved to:\n%s\n', outFolder);
 
 
-function [T, S, labels, dT, dS] = computeMtf(mtf, freqGrid, freqScale)
-% Runs the FFT MTF analysis on the current system and returns tangential
+function [T, S, labels, dT, dS] = computeMtf(TheSystem, maxFreq, freqGrid, freqScale, showDiffLimit)
+% Runs a new FFT MTF analysis on the current system and returns tangential
 % and sagittal MTF (nFreq x nFields) on the common frequency grid, plus the
-% diffraction limit if OpticStudio returned it.
+% diffraction limit if requested and returned by OpticStudio. A new analysis
+% is opened for every call so that no earlier result can be reused.
+mtf = TheSystem.Analyses.New_FftMtf();
+closeMtf = onCleanup(@() mtf.Close());
+
+settings = mtf.GetSettings();
+settings.MaximumFrequency = maxFreq / freqScale;   % cyc/mrad if afocal
+settings.SampleSize = ZOSAPI.Analysis.SampleSizes.S_64x64;
+settings.Wavelength.UseAllWavelengths();
+settings.Field.UseAllFields();
+try
+    settings.ShowDiffractionLimit = showDiffLimit;
+catch
+end
+
 mtf.ApplyAndWaitForCompletion();
 results = mtf.GetResults();
 nSeries = results.NumberOfDataSeries;
@@ -755,6 +735,61 @@ elseif numel(found) > 1
         strjoin(string(found), ', '));
 end
 surfNo = found;
+end
+
+function [mceRow, info] = findCompensatorControl(TheSystem, surfNo)
+% Returns the Multi-Configuration Editor row of a THIC operand that controls
+% the thickness of surfNo (0 if the thickness is set in the Lens Data Editor)
+% and a short description for the log.
+mceRow = 0;
+info = "set in Lens Data Editor";
+
+try
+    mce = TheSystem.MCE;
+    for i = 1:mce.NumberOfOperands
+        op = mce.GetOperandAt(i);
+        if strcmpi(string(op.Type.ToString()), "THIC") && op.Param1 == surfNo
+            mceRow = i;
+            info = sprintf("set by multi-configuration operand THIC (row %d), configuration %d of %d", ...
+                i, mce.CurrentConfiguration, mce.NumberOfConfigurations);
+            return;
+        end
+    end
+catch
+end
+
+try
+    solveType = string(TheSystem.LDE.GetSurfaceAt(surfNo).ThicknessCell.GetSolveData().Type.ToString());
+    info = info + ", solve: " + solveType;
+catch
+end
+end
+
+function v = getCompensator(TheSystem, surfNo, mceRow)
+if mceRow > 0
+    mce = TheSystem.MCE;
+    v = mce.GetOperandAt(mceRow).GetOperandCell(mce.CurrentConfiguration).DoubleValue;
+else
+    v = TheSystem.LDE.GetSurfaceAt(surfNo).Thickness;
+end
+end
+
+function setCompensator(TheSystem, surfNo, mceRow, value)
+% Sets the compensator thickness and checks that the system really took it
+% (a pickup or solve on the thickness would silently restore the old value).
+if mceRow > 0
+    mce = TheSystem.MCE;
+    mce.GetOperandAt(mceRow).GetOperandCell(mce.CurrentConfiguration).DoubleValue = value;
+else
+    TheSystem.LDE.GetSurfaceAt(surfNo).Thickness = value;
+end
+
+actual = TheSystem.LDE.GetSurfaceAt(surfNo).Thickness;
+if abs(actual - value) > 1e-9
+    error(['Compensator thickness of surface %d could not be changed (wanted %.6f, system has %.6f). ' ...
+        'The thickness is probably controlled by a solve, pickup or multi-configuration operand.'], ...
+        surfNo, value, actual);
+end
 end
 
 function f = unitsPerMm(TheSystem)
