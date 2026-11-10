@@ -9,10 +9,15 @@ nFreqPoints   = 100;                % number of frequency steps from 0 to maxFre
 yieldLevels   = [50 80 90 95];      % yield levels (%)
 reportYield   = 90;                 % yield level shown in the per-error MTF plots
 compErrors_um = [10 20 30 40 50];   % compensator setting errors (+/- um)
-compSurface   = [];                 % compensator surface; [] = read from COMP operand of nominal file
+compSurface   = [];                 % [] = automatic: the only VARIABLE thickness in each MC file
+                                    % (a number here is the surface number in the MC files)
 nFilesMax     = Inf;                % use only the first N MC files (e.g. 50 for a quick test)
 % FFT MTF sample size is set in the "Compute MTF" section (S_64x64 by default)
 % Nominal file: the .zmx file in the folder whose name does NOT start with "MC_"
+%
+% The compensator is found in every MC file itself. Tolerancing inserts
+% coordinate breaks into the MC files, so their surface numbers differ from
+% the nominal file; the compensator is the only variable thickness.
 %
 % For every MC file and every error d, the compensator thickness is set to
 % (compensated value + d) and (compensated value - d); the worse of the two
@@ -93,6 +98,8 @@ status = strings(nFiles, 1);
 MTF_T = [];          % nFiles x nFreq x nFields x nLevels (tangential)
 MTF_S = [];          % nFiles x nFreq x nFields x nLevels (sagittal)
 worstSign = nan(nFiles, nErr);   % +1: +d was worse, -1: -d was worse (on-axis MTF)
+compSurfUsed = nan(nFiles, 1);   % compensator surface number found in each MC file
+compComment = "";                % comment of the compensator surface (first valid file)
 compThickness = nan(nFiles, 1);  % compensated thickness of each MC file
 fieldLabels = strings(0, 1);
 nFields = 0;
@@ -133,19 +140,9 @@ try
         fprintf('Nominal file %s is not in afocal mode.\n', nominalName);
     end
 
-    if isempty(compSurface)
-        compSurface = findCompensator(TheSystem);
-    end
-    compSurfaceComment = string(char(TheSystem.LDE.GetSurfaceAt(compSurface).Comment));
-
-    % Is the thickness set in the Lens Data Editor or by a multi-configuration
-    % THIC operand? (An LDE value controlled by the MCE cannot be changed directly.)
-    [compMceRow, compInfo] = findCompensatorControl(TheSystem, compSurface);
-
     lensUnitsPerMm = unitsPerMm(TheSystem);
     onAxisField = findOnAxisField(TheSystem);
 
-    fprintf('Compensator: thickness of surface %d %s (%s)\n', compSurface, compSurfaceComment, compInfo);
     fprintf('Nyquist frequency: %.4f cyc/mm (pixel pitch %.2f um)\n', maxFreq, pixelPitch_um);
 
     tStart = tic;
@@ -160,7 +157,15 @@ try
                 error('OpticStudio could not load this file.');
             end
 
-            t0 = getCompensator(TheSystem, compSurface, compMceRow);
+            % Compensator surface of THIS file (numbers differ from the nominal file)
+            if isempty(compSurface)
+                surfNo = findVariableThickness(TheSystem);
+            else
+                surfNo = compSurface;
+            end
+            compSurfUsed(k) = surfNo;
+
+            t0 = getCompensator(TheSystem, surfNo);
             compThickness(k) = t0;
 
             % Level 1: compensated file, no error (no optimization is run anywhere)
@@ -196,10 +201,10 @@ try
                 d = compErrors_um(e) / 1000 * lensUnitsPerMm;   % um -> lens units
 
                 % Set the error, check that it was really applied, then compute MTF
-                setCompensator(TheSystem, compSurface, compMceRow, t0 + d);
+                setCompensator(TheSystem, surfNo, t0 + d);
                 [Tp, Sp] = computeMtf(TheSystem, maxFreq, freqGrid, freqScale, false);
 
-                setCompensator(TheSystem, compSurface, compMceRow, t0 - d);
+                setCompensator(TheSystem, surfNo, t0 - d);
                 [Tm, Sm] = computeMtf(TheSystem, maxFreq, freqGrid, freqScale, false);
 
                 % Worse side decided by the on-axis field MTF
@@ -219,7 +224,9 @@ try
                 % Check output for the first file: does the MTF react to the error?
                 if ~checkPrinted
                     if e == 1
-                        fprintf('\nCheck on %s (compensator value %.6f):\n', files(k).name, t0);
+                        compComment = string(char(TheSystem.LDE.GetSurfaceAt(surfNo).Comment));
+                        fprintf('\nCheck on %s: compensator = thickness of surface %d %s, value %.6f\n', ...
+                            files(k).name, surfNo, compComment, t0);
                         fprintf('  on-axis mean MTF without error: %.4f\n', ...
                             mean([T0(:, onAxisField); S0(:, onAxisField)]));
                     end
@@ -235,12 +242,12 @@ try
                 if maxChange < 1e-6
                     warning(['The MTF did not change when the compensator thickness was changed. ' ...
                         'Surface %d is probably not the real compensator, or its thickness has no ' ...
-                        'effect (e.g. it is in collimated space). Check compSurface.'], compSurface);
+                        'effect (e.g. it is in collimated space). Check compSurface.'], surfNo);
                 end
                 fprintf('\n');
             end
 
-            setCompensator(TheSystem, compSurface, compMceRow, t0);
+            setCompensator(TheSystem, surfNo, t0);
 
             if any(isnan(MTF_T(k, :, :, :)), 'all') || any(isnan(MTF_S(k, :, :, :)), 'all')
                 error('MTF data contains invalid values.');
@@ -420,7 +427,8 @@ for lev = 1:nLevels
 end
 
 % Applied (worse-side) signed compensator error in um for each file, e.g. +10 or -10
-WorstSide = table(fileNames, compThickness, 'VariableNames', {'FileName', 'CompThickness'});
+WorstSide = table(fileNames, compSurfUsed, compThickness, ...
+    'VariableNames', {'FileName', 'CompSurface', 'CompThickness'});
 for e = 1:nErr
     WorstSide.(sprintf('Err%gum_applied_um', compErrors_um(e))) = worstSign(:, e) * compErrors_um(e);
 end
@@ -436,7 +444,7 @@ writetable(DiffTable, outputFile, 'Sheet', 'Diffraction Limit');
 
 % Raw per-file MTF curves for further analysis
 save(fullfile(outFolder, 'Compensator_RawData.mat'), 'freqGrid', 'MTF_T', 'MTF_S', ...
-    'levelErrors_um', 'worstSign', 'compThickness', 'compSurface', 'diffT', 'diffS', ...
+    'levelErrors_um', 'worstSign', 'compThickness', 'compSurfUsed', 'diffT', 'diffS', ...
     'fileNames', 'status', 'fieldLabels', 'yieldLevels', 'pixelPitch_um', 'maxFreq', ...
     'nominalName', 'nominalAfocal', 'paraxialEFL');
 
@@ -460,6 +468,7 @@ if isfile(pdfFile)
 end
 
 errListText = strjoin(string(compErrors_um), ', ');
+compSurfText = char(strjoin(string(unique(compSurfUsed(valid))'), ', '));
 
 if nominalAfocal
     afocalText = sprintf('Evet – MTF cyc/mrad olarak hesaplandı, 1000/|EFL| ile cyc/mm''ye çevrildi (|EFL| = %.4f mm)', paraxialEFL);
@@ -477,7 +486,7 @@ summaryLines = {
     sprintf('Nominal dosya:       %s', nominalName)
     sprintf('MC dosyaları:        %s*  (geçerli: %d / %d)', filePrefix, nValid, nFiles)
     sprintf('Afokal mod:          %s', afocalText)
-    sprintf('Kompanzatör:         yüzey %d kalınlığı %s', compSurface, char(compSurfaceComment))
+    sprintf('Kompanzatör:         MC dosyalarında yüzey %s kalınlığı %s (tek variable kalınlık)', compSurfText, char(compComment))
     sprintf('Kompanzatör hatası:  ±%s µm', errListText)
     sprintf('Piksel aralığı:      %.2f µm', pixelPitch_um)
     sprintf('Nyquist frekansı:    %.2f cyc/mm  (Nyquist/2 = %.2f cyc/mm)', maxFreq, maxFreq / 2)
@@ -537,11 +546,13 @@ explain1 = {
     ['•  Afokal mod: Sistem "Afocal Image Space" modundaysa Zemax MTF''i açısal frekansta (cyc/mrad) ' ...
      'verir. Bu durumda |EFL| okunur ve frekanslar  ν[cyc/mm] = ν[cyc/mrad] × 1000 / |EFL|  ile ' ...
      'cyc/mm''ye çevrilir. MTF değerleri değişmez, sadece frekans ekseni ölçeklenir. ' afocalExplain]
-    sprintf(['•  Kompanzatör: Tolerans editöründeki COMP satırından okunan yüzeyin kalınlığıdır ' ...
-     '(bu analizde: yüzey %d).'], compSurface)
     '•  On-axis field: Koordinatı (0, 0) olan fielddir.'
     ''
-    'ADIM 2 – REFERANS MTF (0 µm)'
+    'ADIM 2 – KOMPANZATÖRÜN BULUNMASI VE REFERANS MTF (0 µm)'
+    sprintf(['Tolerans analizi MC dosyalarına tilt/decenter için yeni yüzeyler (coordinate break) eklediği ' ...
+     'için MC dosyalarındaki yüzey numaraları nominal dosyadan farklıdır. Bu yüzden kompanzatör her MC ' ...
+     'dosyasının içinde aranır: kalınlığı variable (V) olan tek yüzey kompanzatördür (bu analizde: MC ' ...
+     'dosyalarında yüzey %s). Variable kalınlık sayısı 1 değilse o dosya hata verir ve analize katılmaz.'], compSurfText)
     sprintf(['Her MC_T dosyası kaydedildiği (kompanze edilmiş) haliyle açılır ve polikromatik FFT MTF ' ...
      'hesaplanır: tüm dalga boyları, tüm fieldler, tanjansiyel (T) ve sajital (S) ayrı ayrı, 0''dan ' ...
      'Nyquist frekansına (%.2f cyc/mm) kadar. Bu sonuç "0 µm" referansıdır ve kompanzatör hatası ' ...
@@ -713,85 +724,41 @@ else
 end
 end
 
-function surfNo = findCompensator(TheSystem)
-% Reads the compensator surface from the COMP operand in the Tolerance
-% Data Editor. Only a single thickness compensator (code 0) is supported.
-tde = TheSystem.TDE;
+function surfNo = findVariableThickness(TheSystem)
+% Returns the surface whose thickness is a variable: the compensator of a
+% Monte Carlo file. Exactly one variable thickness is expected.
+lde = TheSystem.LDE;
 found = [];
-for i = 1:tde.NumberOfOperands
-    op = tde.GetOperandAt(i);
-    if strcmpi(string(op.Type.ToString()), "COMP")
-        if op.Param2 ~= 0
-            error('Compensator in TDE row %d is not a thickness (code %d). Set compSurface manually.', i, op.Param2);
-        end
-        found(end + 1) = op.Param1; %#ok<AGROW>
+for i = 0:lde.NumberOfSurfaces - 1
+    solveType = string(lde.GetSurfaceAt(i).ThicknessCell.GetSolveData().Type.ToString());
+    if solveType == "Variable"
+        found(end + 1) = i; %#ok<AGROW>
     end
 end
 
 if isempty(found)
-    error('No COMP operand found in the nominal file. Set compSurface in the user settings.');
+    error('No variable thickness found: the compensator cannot be identified.');
 elseif numel(found) > 1
-    error('More than one COMP operand found (surfaces %s). Set compSurface in the user settings.', ...
-        strjoin(string(found), ', '));
+    error('%d variable thicknesses found (surfaces %s): exactly one (the compensator) is expected.', ...
+        numel(found), strjoin(string(found), ', '));
 end
 surfNo = found;
 end
 
-function [mceRow, info] = findCompensatorControl(TheSystem, surfNo)
-% Returns the Multi-Configuration Editor row of a THIC operand that controls
-% the thickness of surfNo (0 if the thickness is set in the Lens Data Editor)
-% and a short description for the log.
-mceRow = 0;
-info = "set in Lens Data Editor";
-
-try
-    mce = TheSystem.MCE;
-    for i = 1:mce.NumberOfOperands
-        op = mce.GetOperandAt(i);
-        if strcmpi(string(op.Type.ToString()), "THIC") && op.Param1 == surfNo
-            mceRow = i;
-            info = sprintf("set by multi-configuration operand THIC (row %d), configuration %d of %d", ...
-                i, mce.CurrentConfiguration, mce.NumberOfConfigurations);
-            return;
-        end
-    end
-catch
+function v = getCompensator(TheSystem, surfNo)
+v = TheSystem.LDE.GetSurfaceAt(surfNo).Thickness;
 end
 
-try
-    solveType = string(TheSystem.LDE.GetSurfaceAt(surfNo).ThicknessCell.GetSolveData().Type.ToString());
-    info = info + ", solve: " + solveType;
-catch
-end
-end
-
-function v = getCompensator(TheSystem, surfNo, mceRow)
-if mceRow > 0
-    mce = TheSystem.MCE;
-    v = mce.GetOperandAt(mceRow).GetOperandCell(mce.CurrentConfiguration).DoubleValue;
-else
-    v = TheSystem.LDE.GetSurfaceAt(surfNo).Thickness;
-end
-end
-
-function setCompensator(TheSystem, surfNo, mceRow, value)
-% Sets the compensator thickness and checks that the system really took it
-% (a pickup or solve on the thickness would silently restore the old value).
+function setCompensator(TheSystem, surfNo, value)
+% Sets the compensator thickness and checks that the system really took it.
 % The .NET object is stored in a variable first: MATLAB does not apply a
 % property assignment written on a method call chain (obj.Method(x).Prop = v).
-if mceRow > 0
-    mce = TheSystem.MCE;
-    compCell = mce.GetOperandAt(mceRow).GetOperandCell(mce.CurrentConfiguration);
-    compCell.DoubleValue = value;
-else
-    surf = TheSystem.LDE.GetSurfaceAt(surfNo);
-    surf.Thickness = value;
-end
+surf = TheSystem.LDE.GetSurfaceAt(surfNo);
+surf.Thickness = value;
 
 actual = TheSystem.LDE.GetSurfaceAt(surfNo).Thickness;
 if abs(actual - value) > 1e-9
-    error(['Compensator thickness of surface %d could not be changed (wanted %.6f, system has %.6f). ' ...
-        'The thickness is probably controlled by a solve, pickup or multi-configuration operand.'], ...
+    error('Compensator thickness of surface %d could not be changed (wanted %.6f, system has %.6f).', ...
         surfNo, value, actual);
 end
 end

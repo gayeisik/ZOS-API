@@ -50,7 +50,9 @@ ayar.A.calistir   = true;
 ayar.A.dosya      = 'C:\...\DOSYA_A_tolerans.zmx';  % MC'nin kosuldugu NOMINAL dosya
 ayar.A.mcKlasor   = '';        % bos = Dosya A'nin klasoru
 ayar.A.mcOnek     = 'MC_T';    % Zemax'in kaydettigi MC dosyalarinin on eki
-ayar.A.kompOnSurf = 0;         % 0 = otomatik (TDE'deki COMP operandinin yuzeyi)
+ayar.A.kompOnSurf = 0;         % NOMINAL dosyadaki kompanzator yuzeyi; 0 = otomatik (TDE'deki COMP operandi)
+% MC dosyalarinda kompanzator HER DOSYADA ayri bulunur (tek DEGISKEN kalinlik): toleranslama
+% MC dosyalarina coordinate break ekledigi icin yuzey numaralari nominal dosyadan farklidir.
 
 % "Yol olarak kopyala" ile gelen cift tirnaklari temizle
 ayar.A.dosya = strtrim(strrep(ayar.A.dosya, '"', ''));
@@ -212,7 +214,7 @@ if kA == 0
     kA = bul;
 end
 Tnom = TheSystem.LDE.GetSurfaceAt(kA).Thickness;
-fprintf('Dosya A: Kompanzator (on dummy) = %d | nominal kalinlik = %.4f mm\n', kA, Tnom);
+fprintf('Dosya A (nominal): Kompanzator (on dummy) = %d | nominal kalinlik = %.4f mm\n', kA, Tnom);
 
 klasor = ayar.A.mcKlasor;
 if isempty(klasor), klasor = fileparts(ayar.A.dosya); end
@@ -221,20 +223,30 @@ nMC = numel(mc);
 fprintf('%d MC dosyasi bulundu: %s\n\n', nMC, klasor);
 
 dzA = nan(nMC,1);
+kMCilk = NaN;   % MC dosyalarinda bulunan kompanzator yuzeyi (ilk gecerli dosya)
 for k = 1:nMC
     yol = fullfile(klasor, mc{k});
     if ~TheSystem.LoadFile(yol, false)
         warning('Acilamadi: %s', mc{k}); continue;
     end
-    if kA > TheSystem.LDE.NumberOfSurfaces - 1
-        warning('%s: yuzey sayisi farkli, atlandi.', mc{k}); continue;
+    % MC dosyasinda kompanzator = tek degisken kalinlik (yuzey numarasi nominalden farkli)
+    kMC = degiskenKalinlikBul(TheSystem.LDE);
+    if numel(kMC) ~= 1
+        warning('%s: %d degisken kalinlik bulundu (%s), tek kompanzator bekleniyordu; atlandi.', ...
+            mc{k}, numel(kMC), mat2str(kMC));
+        continue;
     end
-    dzA(k) = TheSystem.LDE.GetSurfaceAt(kA).Thickness - Tnom;
+    if isnan(kMCilk), kMCilk = kMC; end
+    dzA(k) = TheSystem.LDE.GetSurfaceAt(kMC).Thickness - Tnom;
     if mod(k, 50) == 0 || k == nMC, fprintf('  %d / %d okundu\n', k, nMC); end
 end
 TheApplication.CloseApplication();
+fprintf('MC dosyalarinda kompanzator yuzeyi (tek degisken kalinlik) = %d\n', kMCilk);
 
 gecerli = ~isnan(dzA);
+if ~any(gecerli)
+    error('Hicbir MC dosyasinda tek degisken kalinlik (kompanzator) bulunamadi.');
+end
 dzA  = dzA(gecerli);  mcAd = mc(gecerli);
 phiA = dzA / egim;                 % Parca 1 ile ayni isaret kurali
 absP = abs(phiA);
