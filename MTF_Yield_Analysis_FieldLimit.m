@@ -1,3 +1,43 @@
+%% MTF YIELD ANALİZİ - FIELD SINIRLI (ZOS-API, MATLAB)
+% NE YAPAR
+%   MTF_Yield_Analysis.m ile aynı analizi yapar, ancak yalnızca dedektörün
+%   belirli bir oranına kadar olan fieldleri kullanır (varsayılan %75). MTF
+%   ölçümü en uç fieldlerde yapılamadığı, yaklaşık %70 fielde kadar yapılabildiği
+%   için analiz ölçülebilen fieldlerle sınırlandırılır.
+%
+% NASIL ÇALIŞIR
+%   1. Kullanıcıdan dedektör formatı (yatay ve dikey piksel sayısı) istenir;
+%      piksel aralığı User settings'tedir.
+%   2. Klasör seçilir. Adı "MC_" ile başlamayan .zmx dosyası nominal tasarımdır.
+%   3. Kullanılacak fieldler YALNIZCA nominal dosyada, bir kez belirlenir; MC_T
+%      dosyalarında aynı field numaraları kullanılır.
+%   4. Nominal dosya afokal moddaysa her MC_T dosyasına image yüzeyinden önce
+%      bir paraxial yüzey eklenir (focal length = thickness = nominal |EFL|) ve
+%      afokal mod kapatılır; böylece MTF cyc/mm olarak hesaplanır. Değişiklikler
+%      yalnızca hafızadadır, diskteki dosyalar değişmez.
+%   5. Her MC_T dosyasında polikromatik FFT MTF hesaplanır (tüm dalga boyları,
+%      T ve S ayrı, 0'dan Nyquist'e kadar); yalnızca seçilen fieldler saklanır.
+%
+% HESAPLAR
+%   Nyquist frekansı = 1000 / (2 × piksel aralığı[µm])  [cyc/mm]
+%   Tam field (%100) = dedektörün yarım köşegeni
+%       = 0.5 × sqrt( (yatay piksel × aralık)² + (dikey piksel × aralık)² )
+%   Field oranı (%) = sqrt(X² + Y²) / yarım köşegen × 100
+%     - Field tipi yükseklik (object/image height, mm) ise X ve Y doğrudan
+%       dedektör koordinatı kabul edilir.
+%     - Field tipi açı ise |EFL| · tan(açı) ile mm'ye çevrilir.
+%   Oranı fieldLimitPct'ten küçük veya eşit olan fieldler kullanılır.
+%   Ortalama ve yield MTF: MTF_Yield_Analysis.m ile aynı (yield %X = dosyaların
+%   en az %X'inin sağladığı MTF, her frekansta ayrı).
+%
+% AYARLAR (User settings)
+%   filePrefix, pixelPitch_um, nFreqPoints, yieldLevels, fieldLimitPct
+%
+% ÇIKTILAR (seçilen klasörde "MTF ANALİZİ - %75 FIELD" klasörüne)
+%   MTF_Report.pdf, MTF_Mean.png, MTF_Yield*.png, MTF_Results.xlsx,
+%   MTF_RawData.mat. Hangi fieldin kullanıldığı ve yüzdesi Command Window'da,
+%   PDF özet sayfasında ve Excel "Field Info" sayfasında yazar.
+
 clc;
 clear;
 close all;

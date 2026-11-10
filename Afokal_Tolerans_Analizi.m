@@ -11,6 +11,9 @@
 %    Zemax'te sadece afokal grubun ic toleranslariyla kosulan Monte Carlo'nun
 %    kaydettigi MC_T*.zmx dosyalari tek tek acilir, kompanzatorun ne kadar
 %    hareket ettigi okunur ve Parca 1'deki egimle vergense cevrilir.
+%    Kompanzator her MC dosyasinda ayri bulunur (tek DEGISKEN kalinlik):
+%    toleranslama MC dosyalarina coordinate break ekledigi icin yuzey
+%    numaralari nominal dosyadan farklidir. Hareket = MC degeri - nominal deger.
 %
 %  KARAR: Gercek vergens dagilimi kabul penceresinin icinde mi?
 %

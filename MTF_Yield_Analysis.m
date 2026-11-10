@@ -1,3 +1,40 @@
+%% MTF YIELD ANALİZİ (ZOS-API, MATLAB)
+% NE YAPAR
+%   Monte Carlo dosyalarının (adı "MC_T" ile başlayan .zmx) her biri için MTF
+%   hesaplar ve tüm dosyalar üzerinden ortalama MTF ile yield MTF eğrilerini
+%   çıkarır. Zemax'in Monte Carlo yield mantığıyla aynıdır.
+%
+% NASIL ÇALIŞIR
+%   1. Klasör seçilir. Adı "MC_" ile başlamayan .zmx dosyası nominal tasarım
+%      kabul edilir (birden fazlaysa listeden seçilir).
+%   2. Nominal dosyada "Afocal Image Space" modu kontrol edilir. Afokalse EFFL
+%      okunur ve |EFL| kaydedilir.
+%   3. Her MC_T dosyası açılır ve polikromatik FFT MTF hesaplanır: tüm dalga
+%      boyları, tüm fieldler, tanjansiyel (T) ve sajital (S) ayrı ayrı, 0'dan
+%      Nyquist frekansına kadar. Dosyalar değiştirilmez.
+%   4. Diffraction limit eğrisi ilk dosyadan alınır.
+%
+% HESAPLAR
+%   Nyquist frekansı = 1000 / (2 × piksel aralığı[µm])  [cyc/mm]  → maksimum frekans
+%   Afokal dosyalarda Zemax MTF'i cyc/mrad verir. Frekans ekseni
+%       ν[cyc/mm] = ν[cyc/mrad] × 1000 / |EFL|
+%   ile cyc/mm'ye çevrilir; MTF değerleri değişmez.
+%   Ortalama MTF  : her frekansta dosyaların MTF ortalaması.
+%   Yield %X MTF  : her frekansta, dosyaların en az %X'inin sağladığı (eşit veya
+%                   üstünde kaldığı) MTF değeri. Eğri her frekansta ayrı
+%                   hesaplanır; tek bir sistemin eğrisi değildir.
+%
+% AYARLAR (User settings)
+%   filePrefix, pixelPitch_um, nFreqPoints, yieldLevels
+%
+% ÇIKTILAR (seçilen klasörde "MTF ANALİZİ" klasörüne)
+%   MTF_Report.pdf   : özet sayfası + ortalama MTF + her yield seviyesi için bir
+%                      sayfa (solda tüm fieldler, sağda on-axis, siyah: diff. limit)
+%   MTF_Mean.png, MTF_Yield*.png : aynı grafikler
+%   MTF_Results.xlsx : her field için frekansa göre ortalama ve yield MTF,
+%                      field bilgisi, diffraction limit, dosya durumları
+%   MTF_RawData.mat  : her dosyanın ham MTF eğrileri
+
 clc;
 clear;
 close all;

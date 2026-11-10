@@ -1,3 +1,54 @@
+%% KOMPANZATÖR HATASI - MTF ANALİZİ (ZOS-API, MATLAB)
+% NE YAPAR
+%   Monte Carlo dosyalarında kompanzatör ideal konumuna optimize edilmiş olarak
+%   kayıtlıdır. Bu kod, kompanzatör ±δ kadar hatalı konumlandığında MTF'in
+%   nasıl değiştiğini gösterir; amaç kompanzatör için izin verilebilecek
+%   konumlandırma hata payını belirlemektir.
+%
+% NASIL ÇALIŞIR
+%   1. Klasör seçilir. Adı "MC_" ile başlamayan .zmx dosyası nominal tasarımdır;
+%      ondan afokal mod, |EFL| ve on-axis field (0,0) okunur.
+%   2. Her MC_T dosyası açılır ve kompanzatör o dosyanın İÇİNDE bulunur:
+%      kalınlığı variable olan tek yüzey kompanzatördür. (Toleranslama MC
+%      dosyalarına coordinate break eklediği için yüzey numaraları nominal
+%      dosyadan farklıdır.) Variable kalınlık sayısı 1 değilse dosya hata verir
+%      ve analize katılmaz.
+%   3. Dosyanın kendi haliyle MTF hesaplanır (0 µm referans).
+%   4. Her hata payı δ için kompanzatör kalınlığı +δ ve −δ kaydırılır ve MTF
+%      yeniden hesaplanır. Hata eklendikten sonra OPTİMİZASYON YAPILMAZ. Her
+%      değişiklikten sonra değerin sisteme gerçekten uygulandığı kontrol edilir.
+%   5. +δ ve −δ'dan on-axis MTF'i daha çok bozan taraf (worst case) o dosya için
+%      alınır; hangi tarafın uygulandığı kaydedilir.
+%   6. Sonunda kompanzatör dosyanın kendi değerine geri alınır; diskteki dosyalar
+%      değişmez.
+%
+% HESAPLAR
+%   MTF: polikromatik FFT MTF, tüm dalga boyları, tüm fieldler, T ve S ayrı,
+%        0'dan Nyquist'e kadar.  Nyquist = 1000 / (2 × piksel aralığı[µm]) [cyc/mm]
+%   Afokal dosyalarda frekans ekseni  ν[cyc/mm] = ν[cyc/mrad] × 1000 / |EFL|
+%   ile çevrilir; MTF değerleri değişmez.
+%   Kötü taraf ölçütü: on-axis fieldin T ve S MTF'inin tüm frekanslardaki ortalaması.
+%   Her hata payı için ortalama MTF ve yield MTF (yield %X = dosyaların en az
+%   %X'inin sağladığı MTF, her frekansta ayrı) hesaplanır.
+%   Özet tablosu: Nyquist/2 ve Nyquist'te, en kötü field ve on-axis için
+%   reportYield seviyesindeki MTF.
+%
+% AYARLAR (User settings)
+%   filePrefix, pixelPitch_um, nFreqPoints, yieldLevels, reportYield,
+%   compErrors_um, compSurface (boş = otomatik), nFilesMax (hızlı deneme için)
+%
+% ÇIKTILAR (seçilen klasörde "KOMPANZATÖR ANALİZİ" klasörüne)
+%   Compensator_Report.pdf   : A4; özet, yöntem ve yorum açıklamaları, her hata
+%                              payı için bir MTF sayfası (üstte tüm fieldler,
+%                              altta on-axis, siyah: diffraction limit)
+%   MTF_Yield*_CompError_*um.png : MTF sayfaları
+%   Compensator_Results.xlsx : hata payına göre MTF tablosu, her hata payı için
+%                              MTF eğrileri, her dosyada bulunan kompanzatör
+%                              yüzeyi ve uygulanan işaretli hata (+δ / −δ)
+%   Compensator_RawData.mat  : her dosyanın ham MTF eğrileri
+%   Command Window           : ilk dosya için kontrol çıktısı (bulunan yüzey ve
+%                              hata payına göre on-axis MTF)
+
 clc;
 clear;
 close all;

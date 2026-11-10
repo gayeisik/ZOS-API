@@ -1,3 +1,32 @@
+%% EFL VE FOV HATA ANALİZİ (MATLAB, OpticStudio gerekmez)
+% NE YAPAR
+%   Her dosyanın EFL ve görüş açısı (yatay/dikey FOV) değerlerini kullanıcının
+%   girdiği hedef değerlerle karşılaştırır, yüzde hatayı ve tolerans içinde
+%   kalan dosya oranını (verim) hesaplar.
+%
+% NASIL ÇALIŞIR
+%   1. Zemax klasörü seçilir. Veriler "FOV ANALİZİ/FOV_Results.xlsx" dosyasından
+%      okunur (önce EFL_Batch_Analysis.m, sonra FOV_Analysis.m çalıştırılmalıdır).
+%   2. Kullanıcıdan hedef EFL (mm), hedef yatay ve dikey FOV (derece) ve her biri
+%      için kabul edilen tolerans (± %) istenir.
+%
+% HESAPLAR
+%   Yüzde hata = (gerçek − hedef) / |hedef| × 100   (işaretli)
+%     +  : değer hedeften büyük,   −  : değer hedeften küçük
+%   EFL büyüklük (mutlak değer) üzerinden karşılaştırılır; böylece negatif EFL'de
+%   de "+" daha uzun odak uzaklığı anlamına gelir.
+%   FOV için ayrıca derece cinsinden hata (gerçek − hedef) verilir.
+%   |hata| ≤ tolerans ise dosya PASS, değilse FAIL.
+%   Verim = PASS olan dosyaların yüzdesi. Genel verim: EFL, yatay FOV ve dikey
+%   FOV'un üçü birden tolerans içinde olan dosyaların yüzdesi.
+%   İstatistikler: ortalama, medyan, standart sapma, min, max, en büyük |hata|
+%   ve %95'lik dilim (dosyaların %95'inin altında kaldığı |hata|).
+%
+% ÇIKTILAR (seçilen klasörde "HATA ANALİZİ" klasörüne)
+%   Error_Histogram.png : üç hata histogramı, tolerans sınırları kırmızı çizgiyle
+%   Error_Results.xlsx  : "Errors by File", "Statistics", "Inputs"
+%   Command Window      : istatistik ve verim özeti
+
 clc;
 clear;
 close all;

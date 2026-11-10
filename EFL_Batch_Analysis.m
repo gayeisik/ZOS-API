@@ -1,3 +1,30 @@
+%% EFL TOPLU ANALİZİ (ZOS-API, MATLAB)
+% NE YAPAR
+%   Seçilen klasördeki Monte Carlo dosyalarının (adı "MC_T" ile başlayan .zmx)
+%   her birini OpticStudio'da açar, etkin odak uzaklığını (EFL) okur ve EFL'nin
+%   dosyalar arasındaki dağılımını çıkarır.
+%
+% NASIL ÇALIŞIR
+%   1. Klasör seçilir; adı filePrefix ("MC_T") ile başlayan .zmx dosyaları bulunur.
+%   2. OpticStudio arka planda (standalone) açılır.
+%   3. Her dosya yüklenir ve EFL, merit function'daki EFFL operandı ile okunur
+%      (birincil dalga boyu, lens birimi mm).
+%   4. Açılamayan veya geçerli EFL vermeyen dosyalar "Status" sütununda işaretlenir
+%      ve istatistiğe katılmaz.
+%
+% HESAPLAR
+%   Geçerli EFL değerleri üzerinden: dosya sayısı, ortalama, medyan, standart
+%   sapma, minimum ve maksimum.
+%
+% ÇIKTILAR (seçilen klasörde "EFL ANALİZİ" klasörüne)
+%   EFL_Histogram.png : EFL dağılım histogramı
+%   EFL_Results.xlsx  : "EFL by File" (dosya adı, EFL, durum) ve "Statistics"
+%   Command Window    : istatistik özeti (EFL'ler tek tek yazdırılmaz)
+%
+% NOT
+%   FOV_Analysis.m ve Error_Analysis.m bu kodun ürettiği EFL_Results.xlsx
+%   dosyasını kullanır; önce bu kod çalıştırılmalıdır.
+
 clc;
 clear;
 close all;

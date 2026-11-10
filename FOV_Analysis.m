@@ -1,3 +1,29 @@
+%% GÖRÜŞ AÇISI (FOV) ANALİZİ (MATLAB, OpticStudio gerekmez)
+% NE YAPAR
+%   EFL_Batch_Analysis.m'nin bulduğu EFL değerlerinden, kullanıcının girdiği
+%   dedektör bilgisiyle her dosya için yatay ve dikey görüş açısını hesaplar.
+%
+% NASIL ÇALIŞIR
+%   1. Zemax klasörü seçilir (EFL kodunda seçilen klasörle aynı). EFL değerleri
+%      "EFL ANALİZİ/EFL_Results.xlsx" dosyasından okunur; yalnızca durumu "OK"
+%      olan dosyalar kullanılır.
+%   2. Kullanıcıdan dedektör formatı (yatay ve dikey piksel sayısı) ve piksel
+%      aralığı (µm) istenir. Piksel sayıları dedektörün TAKILI haline göre
+%      girilmelidir: "yatay" kutusuna yatay yöndeki piksel sayısı yazılır.
+%
+% HESAPLAR
+%   Dedektör genişliği  = yatay piksel × piksel aralığı
+%   Dedektör yüksekliği = dikey piksel × piksel aralığı
+%   Yatay FOV = 2 · atan( genişlik  / (2 · |EFL|) )
+%   Dikey FOV = 2 · atan( yükseklik / (2 · |EFL|) )
+%   EFL'nin mutlak değeri kullanılır (negatif EFL sonucu değiştirmez).
+%   İki açı için: ortalama, medyan, standart sapma, minimum, maksimum.
+%
+% ÇIKTILAR (seçilen klasörde "FOV ANALİZİ" klasörüne)
+%   FOV_Histogram.png : yatay ve dikey FOV histogramları
+%   FOV_Results.xlsx  : "FOV by File", "Statistics", "Detector"
+%   Command Window    : dedektör boyutları ve istatistik özeti
+
 clc;
 clear;
 close all;
