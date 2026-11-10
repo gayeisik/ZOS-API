@@ -553,7 +553,8 @@ imageIdx = lde.NumberOfSurfaces - 1;
 lde.InsertNewSurfaceAt(imageIdx);
 surf = lde.GetSurfaceAt(imageIdx);
 surf.ChangeType(surf.GetSurfaceTypeSettings(ZOSAPI.Editors.LDE.SurfaceType.Paraxial));
-surf.GetSurfaceCell(ZOSAPI.Editors.LDE.SurfaceColumn.Par1).DoubleValue = focalLength;
+focalCell = surf.GetSurfaceCell(ZOSAPI.Editors.LDE.SurfaceColumn.Par1);
+focalCell.DoubleValue = focalLength;   % via a variable: chained assignment is not applied
 surf.Thickness = focalLength;
 surf.Comment = 'Paraxial focus (MTF script)';
 
