@@ -777,11 +777,15 @@ end
 function setCompensator(TheSystem, surfNo, mceRow, value)
 % Sets the compensator thickness and checks that the system really took it
 % (a pickup or solve on the thickness would silently restore the old value).
+% The .NET object is stored in a variable first: MATLAB does not apply a
+% property assignment written on a method call chain (obj.Method(x).Prop = v).
 if mceRow > 0
     mce = TheSystem.MCE;
-    mce.GetOperandAt(mceRow).GetOperandCell(mce.CurrentConfiguration).DoubleValue = value;
+    cell = mce.GetOperandAt(mceRow).GetOperandCell(mce.CurrentConfiguration);
+    cell.DoubleValue = value;
 else
-    TheSystem.LDE.GetSurfaceAt(surfNo).Thickness = value;
+    surf = TheSystem.LDE.GetSurfaceAt(surfNo);
+    surf.Thickness = value;
 end
 
 actual = TheSystem.LDE.GetSurfaceAt(surfNo).Thickness;
