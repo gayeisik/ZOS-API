@@ -127,13 +127,22 @@ statAd = 'Normal 2sigma (varsayilan)';
 R = struct('Satir', {}, 'Operand', {}, 'P1', {}, 'P2', {}, 'P3', {}, 'P4', {}, ...
            'Min', {}, 'Max', {}, 'Birim', {}, 'Okunur', {}, 'Sinif', {}, ...
            'AitOldugu', {}, 'Dagilim', {}, 'Yorum', {});
+okuYolu = ''; okuHata = ''; dokumYapildi = false;
 for i = 1:nOp
     op = TDE.GetOperandAt(i);
     r.Satir   = i;
     r.Operand = upper(strtrim(char(op.Type.ToString())));
     prm = nan(1,4);
     for k = 1:4
-        prm(k) = parametreOku(op, k);
+        [prm(k), yol, hata] = parametreOku(op, k);
+        if ~isempty(yol) && isempty(okuYolu), okuYolu = yol; end
+        if ~isempty(hata), okuHata = hata; end
+    end
+    % Yuzey parametresi olmasi gereken bir satirda Param1 okunamadiysa teshis yaz (bir kez)
+    if isnan(prm(1)) && ~dokumYapildi && ~any(strcmp(r.Operand, {'STAT','TWAV','SAVE','SEED','TOFF','CEXP'}))
+        fprintf('\n! Satir %d (%s): parametreler okunamadi. Son hata: %s\n', i, r.Operand, okuHata);
+        tdeSatirDokum(op);
+        dokumYapildi = true;
     end
     r.P1 = prm(1); r.P2 = prm(2); r.P3 = prm(3); r.P4 = prm(4);
     [r.Min, r.Max] = minMaxOku(op);
@@ -168,6 +177,12 @@ for i = 1:nOp
     end
 end
 Ttde = struct2table(R, 'AsArray', true);
+if isempty(okuYolu)
+    uyarilar{end+1} = ['TDE parametreleri (yuzey numaralari) hicbir yoldan okunamadi. ' ...
+        'Yukaridaki teshis ciktisini gonder.'];
+else
+    fprintf('TDE parametreleri su yolla okundu: %s\n', okuYolu);
+end
 fprintf('\n--- TDE (%d satir) ---\n', nOp);
 disp(Ttde(:, {'Satir', 'Operand', 'P1', 'P2', 'P3', 'Min', 'Max', 'Okunur', 'Sinif', 'AitOldugu', 'Dagilim'}));
 
@@ -201,6 +216,19 @@ if isempty(hz)
     fprintf('Hizalama satiri (TEDX/TEDY/TETX/TETY) bulunamadi.\n');
     Thiz = table();
 else
+    nanSatir = hz(isnan(Ttde.P1(hz)) | isnan(Ttde.P2(hz)));
+    if ~isempty(nanSatir)
+        uyarilar{end+1} = sprintf(['%d hizalama satirinda yuzey araligi okunamadi (NaN), ' ...
+            'hiyerarsiye katilmadi: satir %s'], numel(nanSatir), strjoin(compose('%d', nanSatir'), ','));
+        hz = setdiff(hz, nanSatir);
+    end
+end
+if isempty(hz)
+    if exist('nanSatir', 'var') && ~isempty(nanSatir)
+        fprintf('Hizalama satirlarinin yuzey araliklari okunamadi, hiyerarsi kurulamadi.\n');
+    end
+    Thiz = table();
+else
     aralik = unique([Ttde.P1(hz) Ttde.P2(hz)], 'rows');
     nA = size(aralik,1);
     derinlik = zeros(nA,1); altSayi = zeros(nA,1);
@@ -231,8 +259,13 @@ else
         h.Decenter = ozetle(Ttde, bu, {'TEDX', 'TEDY'});
         h.Tilt     = ozetle(Ttde, bu, {'TETX', 'TETY', 'TETZ'});
         yy = Y([Y.No] == aralik(a,1));
-        h.Pivot = sprintf('S%d %s', aralik(a,1), bosIse(yy.Yorum, ''));
-        h.PivotZ = yy.GlobalZ;
+        if isempty(yy)
+            h.Pivot = sprintf('S%d (LDE''de yok)', aralik(a,1));
+            h.PivotZ = NaN;
+        else
+            h.Pivot = sprintf('S%d %s', aralik(a,1), bosIse(yy.Yorum, ''));
+            h.PivotZ = yy.GlobalZ;
+        end
         h.Satirlar = strjoin(compose('%d', bu'), ',');
         H(end+1) = orderfields(h, H); %#ok<SAGROW>
 
@@ -342,17 +375,46 @@ function z = globalZ(LDE, i)
     end
 end
 
-function v = parametreOku(op, k)
-    v = NaN;
+function [v, yol, hata] = parametreOku(op, k)
+    % TDE parametresini (Surf1, Surf2, Code...) sirayla uc yoldan okumayi dener:
+    %   1) op.Param1..Param4 ozelligi
+    %   2) op.GetOperandCell(TolerancingColumn.ParamN)
+    %   3) op.GetCellAt(k)  (sutun 0 = Type, 1.. = parametreler)
+    % yol : hangi yolun calistigi, hata: hicbiri calismazsa son hata mesaji
+    v = NaN; yol = ''; hata = '';
+    ad = sprintf('Param%d', k);
     try
-        switch k
-            case 1, c = ZOSAPI.Editors.TDE.TolerancingColumn.Param1;
-            case 2, c = ZOSAPI.Editors.TDE.TolerancingColumn.Param2;
-            case 3, c = ZOSAPI.Editors.TDE.TolerancingColumn.Param3;
-            case 4, c = ZOSAPI.Editors.TDE.TolerancingColumn.Param4;
-        end
+        v = double(op.(ad));
+        if ~isnan(v), yol = ['op.' ad]; return; end
+    catch e, hata = e.message;
+    end
+    try
+        c = ZOSAPI.Editors.TDE.TolerancingColumn.(ad);
         v = hucreSayi(op.GetOperandCell(c));
-    catch
+        if ~isnan(v), yol = ['GetOperandCell(' ad ')']; return; end
+    catch e, hata = e.message;
+    end
+    try
+        v = hucreSayi(op.GetCellAt(k));
+        if ~isnan(v), yol = sprintf('GetCellAt(%d)', k); return; end
+    catch e, hata = e.message;
+    end
+    v = NaN;
+end
+
+function tdeSatirDokum(op)
+    % Parametre okunamazsa teshis icin satirin hucrelerini (baslik = deger) yazar
+    fprintf('  Teshis - TDE satiri hucreleri:\n');
+    for c = 0:9
+        try
+            h = op.GetCellAt(c);
+            bas = ''; try, bas = char(h.Header); catch, end
+            fprintf('    GetCellAt(%d): baslik="%s" deger="%s" tip=%s\n', c, bas, ...
+                char(h.Value), char(h.DataType.ToString()));
+        catch e
+            fprintf('    GetCellAt(%d): %s\n', c, e.message);
+            break;
+        end
     end
 end
 
