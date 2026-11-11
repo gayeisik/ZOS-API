@@ -15,10 +15,11 @@
 %      bir paraxial yüzey eklenir (focal length = thickness = nominal |EFL|) ve
 %      afokal mod kapatılır; böylece MTF cyc/mm olarak hesaplanır. Değişiklikler
 %      yalnızca hafızadadır, diskteki dosyalar değişmez.
-%   5. Her MC_T dosyasında polikromatik FFT MTF (tüm dalga boyları, T ve S ayrı,
-%      0'dan Nyquist'e kadar) YALNIZCA seçilen fieldler için, her field ayrı bir
-%      analizle hesaplanır. Diğer fieldler dosyada kalır (vignetting ve field
-%      normalizasyonu değişmez) ama hesaplanmaz; böylece süre kısalır.
+%   5. Her MC_T dosyasında polikromatik FFT MTF hesaplanır (tüm dalga boyları,
+%      T ve S ayrı, 0'dan Nyquist'e kadar); yalnızca seçilen fieldler saklanır.
+%      Tüm fieldler tek analizde hesaplanır: OpticStudio fieldleri işlemci
+%      çekirdeklerine paralel dağıttığı için bu, her fieldi ayrı ayrı
+%      hesaplatmaktan daha hızlıdır.
 %
 % HESAPLAR
 %   Nyquist frekansı = 1000 / (2 × piksel aralığı[µm])  [cyc/mm]
@@ -205,6 +206,7 @@ try
     for k = 1:nFiles
 
         filePath = fullfile(folderPath, files(k).name);
+        mtf = [];
 
         try
             % Load optical system
@@ -221,10 +223,36 @@ try
                 nConverted = nConverted + 1;
             end
 
-            if TheSystem.SystemData.Fields.NumberOfFields ~= nominalNumFields
-                error('Number of fields (%d) differs from nominal file (%d).', ...
-                    TheSystem.SystemData.Fields.NumberOfFields, nominalNumFields);
+            % FFT MTF analysis
+            mtf = TheSystem.Analyses.New_FftMtf();
+            settings = mtf.GetSettings();
+            settings.MaximumFrequency = maxFreq;
+            settings.SampleSize = ZOSAPI.Analysis.SampleSizes.S_64x64;
+            settings.Wavelength.UseAllWavelengths();
+            settings.Field.UseAllFields();
+            try
+                settings.ShowDiffractionLimit = true;
+            catch
             end
+
+            mtf.ApplyAndWaitForCompletion();
+            results = mtf.GetResults();
+            nSeries = results.NumberOfDataSeries;
+            dataSeries = results.DataSeries;
+
+            % Separate field series from the diffraction limit series
+            isDiff = false(nSeries, 1);
+            for s = 1:nSeries
+                isDiff(s) = contains(lower(string(char(dataSeries(s).Description))), "diff");
+            end
+            fieldIdx = find(~isDiff);
+
+            if numel(fieldIdx) ~= nominalNumFields
+                error('Number of fields (%d) differs from nominal file (%d).', numel(fieldIdx), nominalNumFields);
+            end
+
+            % Keep only the fields selected on the nominal file
+            fieldIdx = fieldIdx(selFields);
 
             if nFields == 0
                 nFields = numel(selFields);
@@ -237,28 +265,25 @@ try
                 end
             end
 
-            % One single-field FFT MTF per selected field. The other fields stay
-            % in the file (vignetting and normalization unchanged) but are not
-            % computed. The diffraction limit is taken once, with the on-axis field.
             for f = 1:nFields
-                wantDiff = isempty(diffT) && f == onAxisField;
-                [MTF_T(k, :, f), MTF_S(k, :, f), label, dT, dS] = ...
-                    computeFieldMtf(TheSystem, maxFreq, freqGrid, selFields(f), wantDiff);
+                data = dataSeries(fieldIdx(f));
+                [MTF_T(k, :, f), MTF_S(k, :, f)] = readSeries(data, freqGrid);
 
                 if fieldLabels(f) == ""
-                    fieldLabels(f) = label;
+                    fieldLabels(f) = strtrim(string(char(data.Description)));
                 end
+            end
 
-                if wantDiff
-                    if ~isempty(dT)
-                        diffT = dT;
-                        diffS = dS;
-                        diffSource = "OpticStudio FFT MTF";
-                    else
-                        diffT = analyticDiffLimit(TheSystem, freqGrid);
-                        diffS = diffT;
-                        diffSource = "Analytical (circular aperture, working F/#)";
-                    end
+            % Diffraction limit (taken once, from the first successful file)
+            if isempty(diffT)
+                diffIdx = find(isDiff, 1);
+                if ~isempty(diffIdx)
+                    [diffT, diffS] = readSeries(dataSeries(diffIdx), freqGrid);
+                    diffSource = "OpticStudio FFT MTF";
+                else
+                    diffT = analyticDiffLimit(TheSystem, freqGrid);
+                    diffS = diffT;
+                    diffSource = "Analytical (circular aperture, working F/#)";
                 end
             end
 
@@ -271,6 +296,10 @@ try
         catch ME
             status(k) = string(ME.message);
             fprintf('ERROR: %s - %s\n', files(k).name, ME.message);
+        end
+
+        if ~isempty(mtf)
+            mtf.Close();
         end
 
         if isvalid(wb)
@@ -619,50 +648,6 @@ function v = yieldValue(data, yieldPct)
 sorted = sort(data, 1, 'descend');
 idx = max(1, ceil(yieldPct / 100 * size(data, 1)));
 v = sorted(idx, :);
-end
-
-function [t, s, label, dT, dS] = computeFieldMtf(TheSystem, maxFreq, freqGrid, fieldNo, showDiffLimit)
-% Polychromatic FFT MTF of ONE field (tangential and sagittal) on the common
-% frequency grid, plus the diffraction limit if requested and returned.
-mtf = TheSystem.Analyses.New_FftMtf();
-closeMtf = onCleanup(@() mtf.Close());
-
-settings = mtf.GetSettings();
-settings.MaximumFrequency = maxFreq;
-settings.SampleSize = ZOSAPI.Analysis.SampleSizes.S_64x64;
-settings.Wavelength.UseAllWavelengths();
-settings.Field.SetFieldNumber(fieldNo);
-try
-    settings.ShowDiffractionLimit = showDiffLimit;
-catch
-end
-
-mtf.ApplyAndWaitForCompletion();
-results = mtf.GetResults();
-nSeries = results.NumberOfDataSeries;
-dataSeries = results.DataSeries;
-
-% Separate the field series from the diffraction limit series
-isDiff = false(nSeries, 1);
-for i = 1:nSeries
-    isDiff(i) = contains(lower(string(char(dataSeries(i).Description))), "diff");
-end
-fieldIdx = find(~isDiff);
-
-if numel(fieldIdx) ~= 1
-    error('Single-field MTF (field %d) returned %d data series instead of 1.', fieldNo, numel(fieldIdx));
-end
-
-data = dataSeries(fieldIdx);
-[t, s] = readSeries(data, freqGrid);
-label = strtrim(string(char(data.Description)));
-
-dT = [];
-dS = [];
-diffIdx = find(isDiff, 1);
-if ~isempty(diffIdx)
-    [dT, dS] = readSeries(dataSeries(diffIdx), freqGrid);
-end
 end
 
 function [t, s] = readSeries(data, freqGrid)
