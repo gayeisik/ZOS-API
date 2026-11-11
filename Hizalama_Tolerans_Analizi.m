@@ -107,7 +107,7 @@ for i = 0:nYuzey-1
     if contains(lower(y.Tip), 'coordinate')
         p = nan(1,6);
         for k = 1:6
-            p(k) = s.GetSurfaceCell(parSutun(k)).DoubleValue;
+            p(k) = hucreSayi(s.GetSurfaceCell(parSutun(k)));   % Par6 (sira) tamsayi hucre
         end
         y.CB = sprintf('dX=%g dY=%g tX=%g tY=%g tZ=%g sira=%g', p);
     end
@@ -321,6 +321,17 @@ function c = parSutun(k)
     end
 end
 
+function v = hucreSayi(h)
+    % Hucre tipi Double ya da Integer olabilir: once metin degerinden oku
+    v = NaN;
+    try, v = str2double(char(h.Value)); catch, end
+    if isnan(v)
+        try, v = double(h.IntegerValue); catch
+            try, v = h.DoubleValue; catch, end
+        end
+    end
+end
+
 function z = globalZ(LDE, i)
     % Yuzeyin global koordinattaki z konumu (pivot yerini gormek icin)
     z = NaN;
@@ -340,9 +351,7 @@ function v = parametreOku(op, k)
             case 3, c = ZOSAPI.Editors.TDE.TolerancingColumn.Param3;
             case 4, c = ZOSAPI.Editors.TDE.TolerancingColumn.Param4;
         end
-        h = op.GetOperandCell(c);
-        v = str2double(char(h.Value));
-        if isnan(v), v = h.IntegerValue; end
+        v = hucreSayi(op.GetOperandCell(c));
     catch
     end
 end
