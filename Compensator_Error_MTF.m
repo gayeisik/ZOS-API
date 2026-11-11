@@ -14,11 +14,13 @@
 %      dosyadan farklıdır.) Variable kalınlık sayısı 1 değilse dosya hata verir
 %      ve analize katılmaz.
 %   3. Dosyanın kendi haliyle MTF hesaplanır (0 µm referans).
-%   4. Her hata payı δ için kompanzatör kalınlığı +δ ve -δ kaydırılır ve MTF
-%      yeniden hesaplanır. Hata eklendikten sonra OPTİMİZASYON YAPILMAZ. Her
-%      değişiklikten sonra değerin sisteme gerçekten uygulandığı kontrol edilir.
-%   5. +δ ve -δ'dan on-axis MTF'i daha çok bozan taraf (worst case) o dosya için
-%      alınır; hangi tarafın uygulandığı kaydedilir.
+%   4. Her hata payı δ için kompanzatör kalınlığı +δ ve -δ kaydırılır ve iki
+%      durumda YALNIZCA on-axis fieldin MTF'i hesaplanır (hızlı). Hata eklendikten
+%      sonra OPTİMİZASYON YAPILMAZ. Her değişiklikten sonra değerin sisteme
+%      gerçekten uygulandığı kontrol edilir.
+%   5. On-axis MTF'i daha çok bozan taraf (worst case) seçilir; kompanzatör o
+%      değere getirilir ve tüm fieldlerin MTF'i yalnızca bu tarafta hesaplanır.
+%      Hangi tarafın uygulandığı kaydedilir.
 %   6. Sonunda kompanzatör dosyanın kendi değerine geri alınır; diskteki dosyalar
 %      değişmez.
 %
@@ -71,9 +73,10 @@ nFilesMax     = Inf;                % use only the first N MC files (e.g. 50 for
 % the nominal file; the compensator is the only variable thickness.
 %
 % For every MC file and every error d, the compensator thickness is set to
-% (compensated value + d) and (compensated value - d); the worse of the two
-% (lower on-axis MTF: mean of T and S over all frequencies) is kept and the
-% chosen signed error (e.g. +10 or -10 um) is reported.
+% (compensated value + d) and (compensated value - d) and only the on-axis
+% MTF is computed. The worse of the two (lower on-axis MTF: mean of T and S
+% over all frequencies) is chosen; the MTF of all fields is then computed at
+% that side only, and the chosen signed error (e.g. +10 or -10 um) is reported.
 
 % Nyquist frequency of the detector, used as the maximum MTF frequency
 maxFreq = 1000 / (2 * pixelPitch_um);   % cyc/mm
@@ -220,7 +223,7 @@ try
             compThickness(k) = t0;
 
             % Level 1: compensated file, no error (no optimization is run anywhere)
-            [T0, S0, labels, dT, dS] = computeMtf(TheSystem, maxFreq, freqGrid, freqScale, isempty(diffT));
+            [T0, S0, labels, dT, dS] = computeMtf(TheSystem, maxFreq, freqGrid, freqScale, isempty(diffT), 0);
 
             % First successful file defines the number of fields
             if nFields == 0
@@ -251,26 +254,32 @@ try
             for e = 1:nErr
                 d = compErrors_um(e) / 1000 * lensUnitsPerMm;   % um -> lens units
 
-                % Set the error, check that it was really applied, then compute MTF
+                % Step 1: worse side decided by the on-axis field only (fast).
+                % Each change is checked to be really applied before the MTF is computed.
                 setCompensator(TheSystem, surfNo, t0 + d);
-                [Tp, Sp] = computeMtf(TheSystem, maxFreq, freqGrid, freqScale, false);
+                [Tp, Sp] = computeMtf(TheSystem, maxFreq, freqGrid, freqScale, false, onAxisField);
+                onAxisPlus = mean([Tp(:); Sp(:)]);
 
                 setCompensator(TheSystem, surfNo, t0 - d);
-                [Tm, Sm] = computeMtf(TheSystem, maxFreq, freqGrid, freqScale, false);
-
-                % Worse side decided by the on-axis field MTF
-                onAxisPlus = mean([Tp(:, onAxisField); Sp(:, onAxisField)]);
-                onAxisMinus = mean([Tm(:, onAxisField); Sm(:, onAxisField)]);
+                [Tm, Sm] = computeMtf(TheSystem, maxFreq, freqGrid, freqScale, false, onAxisField);
+                onAxisMinus = mean([Tm(:); Sm(:)]);
 
                 if onAxisPlus <= onAxisMinus
-                    MTF_T(k, :, :, e + 1) = Tp;
-                    MTF_S(k, :, :, e + 1) = Sp;
                     worstSign(k, e) = 1;
                 else
-                    MTF_T(k, :, :, e + 1) = Tm;
-                    MTF_S(k, :, :, e + 1) = Sm;
                     worstSign(k, e) = -1;
                 end
+
+                % Step 2: MTF of all fields at the worse side only
+                setCompensator(TheSystem, surfNo, t0 + worstSign(k, e) * d);
+                [Tw, Sw] = computeMtf(TheSystem, maxFreq, freqGrid, freqScale, false, 0);
+
+                if size(Tw, 2) ~= nFields
+                    error('Number of fields (%d) differs from first file (%d).', size(Tw, 2), nFields);
+                end
+
+                MTF_T(k, :, :, e + 1) = Tw;
+                MTF_S(k, :, :, e + 1) = Sw;
 
                 % Check output for the first file: does the MTF react to the error?
                 if ~checkPrinted
@@ -284,7 +293,7 @@ try
                     fprintf('  +%g um: %.4f   -%g um: %.4f   -> applied %+g um\n', ...
                         compErrors_um(e), onAxisPlus, compErrors_um(e), onAxisMinus, ...
                         worstSign(k, e) * compErrors_um(e));
-                    maxChange = max(maxChange, max(abs([Tp(:) - T0(:); Tm(:) - T0(:)])));
+                    maxChange = max(maxChange, max(abs(Tw(:) - T0(:))));
                 end
             end
 
@@ -611,8 +620,9 @@ explain1 = {
     ''
     'ADIM 3 – KOMPANZATÖR HATASI (±δ)'
     sprintf(['Her hata payı δ (%s µm) için kompanzatör kalınlığı önce +δ, sonra -δ kaydırılır ve her iki ' ...
-     'durumda MTF yeniden hesaplanır. İki sonuçtan on-axis fieldin ortalama MTF''i (T ve S, tüm ' ...
-     'frekanslar) daha düşük olan taraf "kötü taraf" kabul edilir ve o dosya için bu sonuç ' ...
+     'durumda yalnızca on-axis fieldin MTF''i hesaplanır. On-axis fieldin ortalama MTF''i (T ve S, tüm ' ...
+     'frekanslar) daha düşük olan taraf "kötü taraf" kabul edilir. Kompanzatör bu kötü taraftaki ' ...
+     'değere getirilir ve tüm fieldlerin MTF''i bu konumda hesaplanır; o dosya için bu sonuç ' ...
      'kullanılır. Böylece her dosyada en kötü durum (worst case) alınmış olur.'], errListText)
     ['Her dosyada hangi tarafın (+δ veya -δ) uygulandığı Excel''deki "Worse Side" sayfasında, toplam ' ...
      'dosya sayıları ise özet tablosunda ve her MTF sayfasının başlığında verilir.']
@@ -709,11 +719,12 @@ close(allFigs);
 fprintf('\nResults saved to:\n%s\n', outFolder);
 
 
-function [T, S, labels, dT, dS] = computeMtf(TheSystem, maxFreq, freqGrid, freqScale, showDiffLimit)
+function [T, S, labels, dT, dS] = computeMtf(TheSystem, maxFreq, freqGrid, freqScale, showDiffLimit, fieldNo)
 % Runs a new FFT MTF analysis on the current system and returns tangential
 % and sagittal MTF (nFreq x nFields) on the common frequency grid, plus the
 % diffraction limit if requested and returned by OpticStudio. A new analysis
 % is opened for every call so that no earlier result can be reused.
+% fieldNo = 0: all fields; fieldNo > 0: only that field (one column).
 mtf = TheSystem.Analyses.New_FftMtf();
 closeMtf = onCleanup(@() mtf.Close());
 
@@ -721,7 +732,11 @@ settings = mtf.GetSettings();
 settings.MaximumFrequency = maxFreq / freqScale;   % cyc/mrad if afocal
 settings.SampleSize = ZOSAPI.Analysis.SampleSizes.S_64x64;
 settings.Wavelength.UseAllWavelengths();
-settings.Field.UseAllFields();
+if fieldNo > 0
+    settings.Field.SetFieldNumber(fieldNo);
+else
+    settings.Field.UseAllFields();
+end
 try
     settings.ShowDiffractionLimit = showDiffLimit;
 catch
@@ -737,6 +752,10 @@ for s = 1:nSeries
     isDiff(s) = contains(lower(string(char(dataSeries(s).Description))), "diff");
 end
 fieldIdx = find(~isDiff);
+
+if fieldNo > 0 && numel(fieldIdx) ~= 1
+    error('Single-field MTF (field %d) returned %d data series instead of 1.', fieldNo, numel(fieldIdx));
+end
 
 T = nan(numel(freqGrid), numel(fieldIdx));
 S = T;
