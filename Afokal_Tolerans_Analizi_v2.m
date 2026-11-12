@@ -305,8 +305,8 @@ kA = ayar.A.kompOnSurf;
 if kA == 0
     bul = compBul(TheSystem);
     if numel(bul) ~= 1
-        error(['Dosya A''nin TDE''sinde %d kalinlik kompanzatoru (COMP) bulundu (%s). ' ...
-               'Tek COMP olmali, ya da ayar.A.kompOnSurf''i elle gir.'], numel(bul), mat2str(bul));
+        error(['Dosya A''da (nominal) kompanzator otomatik bulunamadi: %d aday (%s). ' ...
+               'ayar.A.kompOnSurf''a NOMINAL dosyadaki kompanzator yuzey numarasini elle gir.'], numel(bul), mat2str(bul));
     end
     kA = bul;
 end
@@ -614,20 +614,29 @@ function n = pickupBul(LDE)
 end
 
 function n = compBul(TheSystem)
-    % TDE'deki COMP operandlarindan kalinlik kompanzatorlerini bulur (Int2/kod = 0)
+    % TDE'deki COMP operandlarindan kalinlik kompanzatorlerini bulur (kod = 0).
+    % Bu numara sadece NOMINAL dosya icin gecerlidir; MC dosyalarinda kompanzator
+    % her dosyada tek degisken kalinlik olarak ayri bulunur.
     n = [];
     try
         TDE = TheSystem.TDE;
         for i = 1:TDE.NumberOfOperands
             op = TDE.GetOperandAt(i);
             if strcmpi(char(op.Type.ToString()), 'COMP')
-                yuzey = op.GetOperandCell(ZOSAPI.Editors.TDE.TolerancingColumn.Param1).IntegerValue;
-                kod   = op.GetOperandCell(ZOSAPI.Editors.TDE.TolerancingColumn.Param2).IntegerValue;
-                if kod == 0, n(end+1) = yuzey; end %#ok<AGROW>
+                if double(op.Param2) == 0, n(end+1) = double(op.Param1); end %#ok<AGROW>
             end
         end
     catch hata
-        warning('COMP otomatik okunamadi (%s). ayar.A.kompOnSurf''i elle gir.', hata.message);
+        warning('COMP otomatik okunamadi (%s).', hata.message);
+        n = [];
+    end
+    % Yedek: COMP okunamadiysa nominal dosyadaki tek degisken kalinlik
+    if isempty(n)
+        d = degiskenKalinlikBul(TheSystem.LDE);
+        if isscalar(d)
+            n = d;
+            fprintf('COMP operandi okunamadi; nominal dosyadaki tek degisken kalinlik kullanildi (yuzey %d).\n', d);
+        end
     end
 end
 
