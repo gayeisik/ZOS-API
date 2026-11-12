@@ -65,6 +65,9 @@
 %   Magnification_Results.xlsx  : "Summary", "Percentiles", sistem başına dosya
 %                                 tabloları, "Pairs" (tüm çiftler), "Settings"
 %   Magnification_Data.mat      : tüm ham veriler
+%   Magnification_Report.pdf    : A4 rapor; özet, otomatik sonuç / değerlendirme,
+%                                 yöntem, istatistiklerin anlamı ve her grafik için
+%                                 "nasıl okunur / nasıl yorumlanır" açıklaması
 
 clc;
 clear;
@@ -414,6 +417,341 @@ writetable(table(settingNames, settingValues, 'VariableNames', {'Parameter', 'Va
 save(fullfile(outFolder, 'Magnification_Data.mat'), 'sys', 'E1', 'E2', 'names1', 'names2', 'M', 'pass', ...
     'magConst', 'magTarget', 'magTol', 'yieldPct', 'mtfFreqFrac', 'pixelPitch_um', 'nPixels', 'pixelScale');
 
+%% PDF report (A4): summary, assessment, method, interpretation, one page per figure
+pdfFile = fullfile(outFolder, 'Magnification_Report.pdf');
+
+% Remove old report files (single and per-page)
+oldPages = dir(fullfile(outFolder, 'Magnification_Report_page*.pdf'));
+for i = 1:numel(oldPages)
+    delete(fullfile(outFolder, oldPages(i).name));
+end
+if isfile(pdfFile)
+    delete(pdfFile);
+end
+
+% If the old report could not be deleted (e.g. open in a PDF viewer),
+% save the new one under a time-stamped name
+if isfile(pdfFile)
+    pdfFile = fullfile(outFolder, ['Magnification_Report_' char(datetime('now', 'Format', 'yyyyMMdd_HHmmss')) '.pdf']);
+    fprintf('\nMagnification_Report.pdf is open in another program; new report: %s\n', pdfFile);
+end
+
+n1Name = char(sys(1).name);
+n2Name = char(sys(2).name);
+reqText = sprintf('%.4f ± %.4f  (%.4f – %.4f)', magTarget, magTol, magLow, magHigh);
+afocalWord = ["Hayır", "Evet"];
+
+% --- Page: summary -------------------------------------------------------
+summaryLines = {
+    sprintf('Tarih:                 %s', char(datetime('now', 'Format', 'dd.MM.yyyy HH:mm')))
+    sprintf('Büyütme isteri:        M = %s', reqText)
+    sprintf('Formül:                M = (%g × %.2f µm / %.2f µm) × |EFL_%s| / |EFL_%s|', ...
+        pixelScale, pixelPitch_um(2), pixelPitch_um(1), n1Name, n2Name)
+    sprintf('                         = %.6f × |EFL_%s| / |EFL_%s|', magConst, n1Name, n2Name)
+    sprintf('Yield seviyesi:        %%%g  (MTF, Nyquist × %g)', yieldPct, mtfFreqFrac)
+    ''
+    };
+for s = 1:2
+    summaryLines = [summaryLines; {
+        sprintf('SİSTEM %d – %s', s, sys(s).name)
+        sprintf('  Klasör:              %s', sys(s).folder)
+        sprintf('  Nominal dosya:       %s   |EFL| = %.4f mm', sys(s).nominalName, sys(s).nominalEFL)
+        sprintf('  Afokal mod:          %s', afocalWord(sys(s).isAfocal + 1))
+        sprintf('  Piksel:              %d × %.2f µm', nPixels(s), sys(s).pitch)
+        sprintf('  MTF ölçütü:          %s, %.2f cyc/mm, eşik %.4f', fieldText(mtfFields{s}), sys(s).mtfFreq, sys(s).threshold)
+        sprintf('  Dosyalar:            %d MC, %d geçerli, %d yield kümesinde', ...
+            numel(sys(s).fileNames), sum(sys(s).valid), sum(sys(s).inYield))
+        sprintf('  |EFL| yield kümesi:  ort. %.4f mm, std %.4f mm, %.4f – %.4f mm', ...
+            mean(sys(s).EFL(sys(s).inYield)), std(sys(s).EFL(sys(s).inYield)), ...
+            min(sys(s).EFL(sys(s).inYield)), max(sys(s).EFL(sys(s).inYield)))
+        ''}]; %#ok<AGROW>
+end
+summaryLines = [summaryLines; {
+    'SONUÇLAR'
+    sprintf('  Çift sayısı:         %d × %d = %d', n1, n2, nPairs)
+    sprintf('  Geçen çift:          %d   -> GEÇME ORANI %%%.2f', nPass, passPct)
+    sprintf('  Alt sınır altında:   %%%.2f      Üst sınır üstünde: %%%.2f', belowPct, abovePct)
+    sprintf('  Nominal M:           %.5f', mNominal)
+    sprintf('  Ortalama M:          %.5f      Std M: %.5f', mMean, mStd)
+    sprintf('  Medyan M:            %.5f      Min / Max: %.5f / %.5f', mMed, mMin, mMax)
+    sprintf('  %%1 – %%99 aralığı:    %.5f – %.5f', pctValues(pctLevels == 1), pctValues(pctLevels == 99))
+    sprintf('  Cp / Cpk:            %.3f / %.3f', Cp, Cpk)
+    sprintf('  Normal dağ. tahmini: %%%.2f geçme', normPassPct)
+    sprintf('  Ortalama merkezde:   %%%.2f geçme', centeredPassPct)
+    sprintf('  Varyans katkısı:     %s %%%.1f, %s %%%.1f', n1Name, contribPct(1), n2Name, contribPct(2))
+    sprintf('  İzinli |EFL_%s|:    %.4f – %.4f mm  (nominal %s ile)', n2Name, efl2Window(1), efl2Window(2), n1Name)
+    sprintf('  İzinli |EFL_%s|:    %.4f – %.4f mm  (nominal %s ile)', n1Name, efl1Window(1), efl1Window(2), n2Name)
+    sprintf('  %s dosyaları:      en az bir %s ile %%%.1f, tümüyle %%%.1f uyumlu', n1Name, n2Name, anyMatch(1), allMatch(1))
+    sprintf('  %s dosyaları:      en az bir %s ile %%%.1f, tümüyle %%%.1f uyumlu', n2Name, n1Name, anyMatch(2), allMatch(2))
+    ''
+    'RAPORUN İÇERİĞİ'
+    '  Sayfa 2   : Sonuç ve değerlendirme'
+    '  Sayfa 3   : Analiz yöntemi'
+    '  Sayfa 4   : İstatistiklerin anlamı'
+    '  Sayfa 5-8 : Grafikler ve nasıl okunacakları'
+    }];
+
+failedText = {};
+for s = 1:2
+    failed = sys(s).fileNames(~sys(s).valid);
+    if ~isempty(failed)
+        shown = failed(1:min(end, 5));
+        failedText = [failedText; {sprintf('%s: hesaplanamayan dosyalar (%d): %s', ...
+            sys(s).name, numel(failed), strjoin(shown, ', '))}]; %#ok<AGROW>
+        if numel(failed) > numel(shown)
+            failedText{end} = [failedText{end} sprintf(' ... (+%d)', numel(failed) - numel(shown))];
+        end
+    end
+end
+if ~isempty(failedText)
+    summaryLines = [summaryLines; {''}; failedText];
+end
+
+summaryFig = textPage('BÜYÜTME TOLERANS ANALİZ RAPORU', summaryLines, 'Courier New', 8);
+
+% --- Page: assessment (generated from the results) -----------------------
+assess = {
+    'GENEL SONUÇ'
+    sprintf(['%d %s ve %d %s dosyasından oluşan %d çiftin %d''i büyütme isterini (%s) sağlıyor: ' ...
+     'geçme oranı %%%.2f. Yani yield kümesinden rastgele seçilen bir %s ile bir %s birlikte ' ...
+     'kullanıldığında isteri sağlama olasılığı yaklaşık %%%.1f''dir.'], ...
+     n1, n1Name, n2, n2Name, nPairs, nPass, reqText, passPct, n1Name, n2Name, passPct)
+    ''
+    'NOMİNAL TASARIM'
+    };
+if abs(mNominal - magTarget) > magTol
+    assess{end + 1, 1} = sprintf(['Nominal büyütme M = %.5f, istere uymuyor (sapma %+.5f). Toleranslardan ' ...
+        'önce nominal EFL oranının düzeltilmesi gerekir.'], mNominal, mNominal - magTarget);
+else
+    assess{end + 1, 1} = sprintf(['Nominal büyütme M = %.5f; hedeften sapma %+.5f, yani tolerans bandının ' ...
+        '%%%.0f''i nominal tasarımda kullanılmış.'], mNominal, mNominal - magTarget, ...
+        100 * abs(mNominal - magTarget) / magTol);
+end
+
+assess = [assess; {''; 'ORTALAMA KAYMASI MI, SAÇILIM MI?'}];
+shift = mMean - magTarget;
+if abs(shift) > 0.2 * magTol
+    assess{end + 1, 1} = sprintf(['Ortalama M = %.5f, hedeften %+.5f kaymış (tolerans bandının %%%.0f''i). ' ...
+        'Ortalama hedefe getirilirse (nominal EFL oranı düzeltilerek) geçme oranı %%%.2f''den %%%.2f''ye çıkar.'], ...
+        mMean, shift, 100 * abs(shift) / magTol, passPct, centeredPassPct);
+else
+    assess{end + 1, 1} = sprintf(['Ortalama M = %.5f, hedefe yakın (sapma %+.5f). Ortalamayı tam merkeze ' ...
+        'almak geçme oranını yalnızca %%%.2f''den %%%.2f''ye çıkarır; kayıp esas olarak dağılımın ' ...
+        'genişliğinden (EFL saçılımı) geliyor.'], mMean, shift, passPct, centeredPassPct);
+end
+
+assess = [assess; {''; 'SÜREÇ YETERLİLİĞİ (Cpk)'}];
+if Cpk >= 1.33
+    cpkText = 'yeterli (≥ 1.33): dağılım tolerans bandına rahatça sığıyor';
+elseif Cpk >= 1
+    cpkText = 'sınırda (1 – 1.33): dağılım banda sığıyor ama pay az';
+else
+    cpkText = 'yetersiz (< 1): dağılımın kuyrukları tolerans bandının dışına taşıyor';
+end
+assess{end + 1, 1} = sprintf(['Cp = %.3f, Cpk = %.3f -> %s. Normal dağılım varsayımıyla tahmini geçme ' ...
+    'oranı %%%.2f (ölçülen %%%.2f). İkisi belirgin farklıysa dağılım normal değildir; ölçülen oran esas alınmalı.'], ...
+    Cp, Cpk, cpkText, normPassPct, passPct);
+
+assess = [assess; {''; 'HANGİ SİSTEM BASKIN?'}];
+[~, dom] = max(contribPct);
+assess{end + 1, 1} = sprintf(['Büyütme saçılımının %%%.1f''i %s, %%%.1f''i %s sisteminin EFL saçılımından geliyor. ' ...
+    'Geçme oranını artırmak için EFL toleranslarını sıkılaştırmada öncelik %s sistemindedir.'], ...
+    contribPct(1), n1Name, contribPct(2), n2Name, sys(dom).name);
+
+assess = [assess; {''; 'İZİN VERİLEN EFL ARALIKLARI'}];
+assess{end + 1, 1} = sprintf(['%s nominal (|EFL| = %.4f mm) kabul edilirse %s''in |EFL|''si %.4f – %.4f mm ' ...
+    'aralığında olmalıdır. %s nominal (|EFL| = %.4f mm) kabul edilirse %s''ın |EFL|''si %.4f – %.4f mm ' ...
+    'aralığında olmalıdır.'], n1Name, sys(1).nominalEFL, n2Name, efl2Window(1), efl2Window(2), ...
+    n2Name, sys(2).nominalEFL, n1Name, efl1Window(1), efl1Window(2));
+
+assess = [assess; {''; 'EŞLEŞTİRME (SEÇİCİ MONTAJ) POTANSİYELİ'}];
+assess{end + 1, 1} = sprintf(['%s dosyalarının %%%.1f''i en az bir %s ile, %%%.1f''i tüm %s dosyalarıyla isteri ' ...
+    'sağlıyor. %s dosyalarının %%%.1f''i en az bir %s ile, %%%.1f''i tümüyle sağlıyor. "En az bir" oranı ' ...
+    '"tümü" oranından belirgin büyükse, EFL ölçülüp sistemler eşleştirilerek (seçici montaj) geçme oranı artırılabilir.'], ...
+    n1Name, anyMatch(1), n2Name, allMatch(1), n2Name, n2Name, anyMatch(2), n1Name, allMatch(2));
+
+if min(n1, n2) < 50
+    assess = [assess; {''; 'UYARI – ÖRNEKLEM BÜYÜKLÜĞÜ'}];
+    assess{end + 1, 1} = sprintf(['Yield kümelerinde %d ve %d dosya var. Çift sayısı (%d) büyük görünse de ' ...
+        'çiftler birbirinden bağımsız değildir (her dosya %d veya %d çiftte tekrar kullanılır); sonucun ' ...
+        'güvenilirliği çift sayısıyla değil dosya sayısıyla sınırlıdır. Güvenilir bir oran için sistem başına ' ...
+        'en az 50 – 100 MC dosyası önerilir.'], n1, n2, nPairs, n2, n1);
+end
+
+assessFig = textPage('1. SONUÇ VE DEĞERLENDİRME', assess, 'Arial', 10);
+
+% --- Page: method --------------------------------------------------------
+method = {
+    'AMAÇ'
+    sprintf(['%s ve %s birlikte çalışır: %s görüntüsü %s üzerinde gösterilir ve gündüz kanalına aktarılır. ' ...
+     'Toplam büyütmenin %s olması istenir. Her iki sistemin üretim toleransları EFL''lerini değiştirir; bu ' ...
+     'analiz, toleranslı iki sistem birleştirildiğinde büyütmenin isteri hangi olasılıkla sağladığını bulur.'], ...
+     n1Name, n2Name, n1Name, n2Name, reqText)
+    ''
+    'ADIM 1 – DOSYALAR'
+    sprintf(['Her sistem için ayrı bir Monte Carlo klasörü seçilir. Adı %s ile başlayan .zmx dosyaları MC ' ...
+     'dosyalarıdır (her biri olası bir üretilmiş sistem); adı MC_ ile başlamayan dosya nominal tasarımdır.'], filePrefix)
+    ''
+    'ADIM 2 – EFL VE MTF'
+    ['Her dosya OpticStudio''da açılır. EFL, EFFL operandıyla okunur ve her zaman mutlak değeri (|EFL|) ' ...
+     'kullanılır. MTF polikromatik FFT MTF''dir (tüm dalga boyları, tüm fieldler, T ve S).']
+    sprintf(['MTF ölçütü her sistemin kendi Nyquist frekansının %g katında alınır: %s için %.2f cyc/mm ' ...
+     '(%.2f µm piksel), %s için %.2f cyc/mm (%.2f µm piksel). Dosya başına tek sayı, seçilen fieldlerde T ' ...
+     've S MTF''lerinin en düşüğüdür. Afokal dosyalarda Zemax MTF''i cyc/mrad verir; frekans ' ...
+     'ν[cyc/mm] = ν[cyc/mrad] × 1000 / |EFL_nominal| ile çevrilir.'], mtfFreqFrac, n1Name, sys(1).mtfFreq, ...
+     sys(1).pitch, n2Name, sys(2).mtfFreq, sys(2).pitch)
+    ''
+    'ADIM 3 – YIELD KÜMESİ'
+    sprintf(['Her sistemde dosyalar MTF ölçütüne göre sıralanır ve en iyi %%%g seçilir. Yalnızca bu dosyalar ' ...
+     'çaprazlamaya girer: MTF şartını sağlamayan sistemler zaten üretimde elenecektir.'], yieldPct)
+    ''
+    'ADIM 4 – ÇAPRAZLAMA VE BÜYÜTME'
+    sprintf(['%s yield kümesindeki her dosya, %s yield kümesindeki her dosyayla eşleştirilir: %d × %d = %d çift. ' ...
+     'Bu, olası tüm (%s, %s) ikililerinin listesidir; bir %s her %s ile denenir.'], ...
+     n1Name, n2Name, n1, n2, nPairs, n1Name, n2Name, n1Name, n2Name)
+    sprintf(['Bir hedef, %s''da |EFL_1| × tanθ büyüklüğünde görüntü oluşturur; bu %.2f µm''lik dedektör ' ...
+     'pikselleriyle örneklenir ve her dedektör pikseli OLED''de %g piksele (%.2f µm) basılır. OLED görüntüsü ' ...
+     '|EFL_2| ile açıya çevrilir. Çıkış açısının giriş açısına oranı büyütmedir:'], ...
+     n1Name, pixelPitch_um(1), pixelScale, pixelPitch_um(2))
+    sprintf('        M = (%g × %.2f / %.2f) × |EFL_1| / |EFL_2| = %.6f × |EFL_1| / |EFL_2|', ...
+        pixelScale, pixelPitch_um(2), pixelPitch_um(1), magConst)
+    sprintf('Bir çift |M − %.2f| ≤ %.2f ise geçer.', magTarget, magTol)
+    ''
+    'NEDEN n1 × n2 ÇİFT (n! DEĞİL)?'
+    ['n1 × n2, birbirinden farklı tüm ikililerin sayısıdır. n! ise n sistemin hepsini aynı anda birebir ' ...
+     'dağıtmanın yol sayısıdır; her dağıtım bu ikililerden n tanesini seçer ve yeni bir ikili üretmez. Her ' ...
+     'ikili tüm dağıtımlarda eşit sayıda yer aldığından, geçme oranı iki yolla da aynı çıkar.']
+    };
+methodFig = textPage('2. ANALİZ YÖNTEMİ', method, 'Arial', 10);
+
+% --- Page: meaning of the statistics -------------------------------------
+meaning = {
+    'GEÇME ORANI'
+    ['Kriteri sağlayan çiftlerin tüm çiftlere oranı. Yield kümelerinden rastgele seçilen iki sistemin ' ...
+     'birlikte isteri sağlama olasılığının tahminidir. Alt / üst sınır dışında kalan oranlar, büyütmenin ' ...
+     'hangi yönde sorun çıkardığını gösterir.']
+    ''
+    'ORTALAMA, STD, YÜZDELİKLER'
+    ['Ortalama M''nin hedeften farkı sistematik kaymadır; std saçılımdır. %1 – %99 aralığı, sistemlerin ' ...
+     '%98''inin içinde kaldığı büyütme aralığıdır; bu aralık tolerans bandının içindeyse tasarım güvenlidir. ' ...
+     'Tüm yüzdelikler Excel''de "Percentiles" sayfasındadır.']
+    ''
+    'Cp VE Cpk'
+    ['Cp = bant genişliği / (6σ): dağılımın genişliği banda sığıyor mu? Cpk = ortalamadan en yakın sınıra ' ...
+     'uzaklık / (3σ): kayma da hesaba katılır. Cpk ≥ 1.33 yeterli, 1 – 1.33 sınırda, < 1 yetersiz kabul ' ...
+     'edilir. Cp büyük ama Cpk küçükse sorun kaymadır, ikisi de küçükse sorun saçılımdır. Normal dağılım ' ...
+     'varsayar; az dosyayla dikkatli yorumlanmalıdır.']
+    ''
+    'ORTALAMA MERKEZDE GEÇME ORANI'
+    ['Tüm büyütmeler, ortalama tam hedefe gelecek şekilde ölçeklenirse elde edilecek geçme oranı. Bu, ' ...
+     'nominal EFL oranını (örneğin bir sistemin nominal EFL''sini) düzelterek kazanılabilecek en fazla ' ...
+     'iyileşmeyi gösterir. Mevcut oranla farkı küçükse nominal düzeltme işe yaramaz, toleranslar sıkılaşmalıdır.']
+    ''
+    'VARYANS KATKISI'
+    ['M = sabit × EFL_1 / EFL_2 olduğundan ln M = ln EFL_1 − ln EFL_2 ve var(ln M) = var(ln EFL_1) + ' ...
+     'var(ln EFL_2). Her terimin toplama oranı, o sistemin büyütme saçılımına katkısıdır (yaklaşık olarak ' ...
+     'EFL''nin göreli std''sinin karesi). Katkısı büyük sistemin EFL toleransı önceliklidir.']
+    ''
+    'DOSYA BAZINDA GEÇME ORANI'
+    ['Bir dosyanın diğer sistemin dosyalarının yüzde kaçıyla isteri sağladığı. %100: hangi eşle birleşirse ' ...
+     'birleşsin çalışır. %0: hiçbiriyle çalışmaz. Oranların EFL''ye göre nasıl düştüğü, o sistem için ' ...
+     'kabul edilebilir EFL sınırını verir. Excel''de sistem başına dosya tablolarında verilmiştir.']
+    ''
+    'İZİN VERİLEN EFL ARALIĞI'
+    ['Bir sistem tam nominal üretilirse, isteri sağlamak için diğer sistemin |EFL|''sinin kalması gereken ' ...
+     'aralık. Diğer sistem de toleranslı olduğundan gerçek pay bu aralıktan daha dardır.']
+    };
+meaningFig = textPage('3. İSTATİSTİKLERİN ANLAMI', meaning, 'Arial', 10);
+
+% --- Figure pages --------------------------------------------------------
+plotFigs = gobjects(4, 1);
+
+plotFigs(1) = figurePage(fig1, '4. BÜYÜTME DAĞILIMI', {
+    'NASIL OKUNUR'
+    sprintf(['•  Her çubuk, büyütmesi o aralıkta olan %s – %s çifti sayısıdır. Yeşil bant isterdir (%s); ' ...
+     'bant içindeki çubuklar geçen çiftlerdir.'], n1Name, n2Name, reqText)
+    ['•  Siyah noktalı çizgi nominal M, turuncu kesikli çizgi tüm çiftlerin ortalama M''sidir. İkisi ' ...
+     'farklıysa toleranslar büyütmeyi sistematik olarak bir yöne itiyor demektir.']
+    'NASIL YORUMLANIR'
+    '•  Dağılım bandın ortasında ve banttan dar: tasarım güvenli.'
+    ['•  Dağılım bir kenara yığılmış veya tek taraftan taşıyor: sorun kaymadır; nominal EFL oranı ' ...
+     'düzeltilerek çözülür ("ortalama merkezde geçme oranı" kazancı gösterir).']
+    ['•  Dağılım bandın iki tarafından da taşıyor: sorun saçılımdır; EFL toleransları sıkılaştırılmalı ' ...
+     '(öncelik varyans katkısı büyük olan sistemde) veya seçici montaj yapılmalıdır.']
+    }, false);
+
+plotFigs(2) = figurePage(fig2, '5. EFL ÇİFT HARİTASI', {
+    'NASIL OKUNUR'
+    sprintf(['•  Her nokta bir çifttir: yatay eksen %s |EFL|, dikey eksen %s |EFL|. Yeşil = geçti, ' ...
+     'kırmızı = kaldı. Sarı yıldız nominal tasarımdır.'], n1Name, n2Name)
+    sprintf(['•  Düz siyah çizgi M = %.2f (ideal oran), kesikli çizgiler M = %.2f ve M = %.2f sınırlarıdır; ' ...
+     'kesikli çizgilerin arası kabul bölgesidir. Sol üstte M küçük (< %.2f), sağ altta M büyüktür (> %.2f).'], ...
+     magTarget, magLow, magHigh, magLow, magHigh)
+    'NASIL YORUMLANIR'
+    sprintf(['•  Nokta bulutu yatayda genişse saçılım %s''dan, dikeyde genişse %s''den gelir. Bulut kabul ' ...
+     'bölgesinin bir tarafına kaymışsa nominal oran düzeltilmelidir.'], n1Name, n2Name)
+    ['•  Kabul bölgesi çizgilerine paralel bir şerit içinde kalan EFL çiftleri birlikte çalışır. Bulut ' ...
+     'bölgeden taşıyorsa, EFL ölçülüp sistemler bu harita üzerinden eşleştirilebilir (seçici montaj).']
+    }, true);
+
+plotFigs(3) = figurePage(fig3, '6. DOSYA BAZINDA GEÇME ORANI', {
+    'NASIL OKUNUR'
+    ['•  Her nokta bir dosyadır. Yatay eksen dosyanın |EFL|''si, dikey eksen diğer sistemin yield ' ...
+     'kümesindeki dosyaların yüzde kaçıyla isteri sağladığıdır. Noktalı çizgi nominal |EFL|''dir.']
+    'NASIL YORUMLANIR'
+    ['•  %100 olan dosyalar diğer sistemin her dosyasıyla çalışır; %0 olanlar hiçbiriyle çalışmaz. ' ...
+     'Genellikle nominal EFL çevresinde yüksek, uçlarda düşük bir tepe şekli görülür; tepe nominalden ' ...
+     'kaymışsa nominal oran düzeltilmelidir.']
+    ['•  Oranın hızla düştüğü EFL değerleri, o sistem için kabul edilebilir EFL sınırlarıdır; EFL toleransı ' ...
+     'veya EFL''ye göre sınıflama (seçici montaj) için kullanılabilir.']
+    ['•  Başlıktaki "en az birine uyan" oranı, eşleştirme yapılırsa kurtarılabilecek dosyaların oranıdır; ' ...
+     '"hepsine uyan" oranı eşleştirmesiz kesin çalışan dosyaların oranıdır.']
+    }, false);
+
+plotFigs(4) = figurePage(fig4, '7. EFL DAĞILIMLARI', {
+    'NASIL OKUNUR'
+    sprintf(['•  Gri: tüm geçerli MC dosyalarının |EFL| dağılımı. Mavi: MTF''e göre %%%g yield kümesi ' ...
+     '(çaprazlamada kullanılan dosyalar). Noktalı çizgi nominal |EFL|''dir.'], yieldPct)
+    'NASIL YORUMLANIR'
+    ['•  Mavi histogram griden belirgin farklıysa MTF ile EFL ilişkilidir: MTF''i kötü olup elenen ' ...
+     'dosyalar EFL''de de uçtadır.']
+    ['•  Dağılımın nominale göre kayması, toleransların EFL''yi sistematik olarak değiştirdiğini gösterir; ' ...
+     'bu kayma doğrudan büyütmenin ortalamasına yansır.']
+    ['•  İki sistemin göreli genişliği (std / ortalama EFL) büyütme saçılımına katkılarını belirler; ' ...
+     'sayısal pay Sonuç sayfasında verilmiştir.']
+    }, false);
+
+% --- Assemble pages: frame, header and page numbers ----------------------
+allFigs = [summaryFig; assessFig; methodFig; meaningFig; plotFigs];
+nPages = numel(allFigs);
+headerText = sprintf('Büyütme Tolerans Analizi  |  %s: %s  |  %s: %s', ...
+    n1Name, sys(1).nominalName, n2Name, sys(2).nominalName);
+
+for p = 1:nPages
+    addPageFrame(allFigs(p), headerText, p, nPages);
+end
+
+try
+    % Multi-page PDF (exportgraphics with 'Append' needs R2021b+)
+    exportgraphics(allFigs(1), pdfFile, 'ContentType', 'vector');
+    for p = 2:nPages
+        exportgraphics(allFigs(p), pdfFile, 'ContentType', 'vector', 'Append', true);
+    end
+    fprintf('\nPDF report saved to:\n%s\n', pdfFile);
+catch pdfErr
+    % Older MATLAB: one A4 PDF file per page
+    fprintf('\nMulti-page PDF export failed: %s\n', pdfErr.message);
+    if isfile(pdfFile)
+        delete(pdfFile);
+    end
+    for p = 1:nPages
+        print(allFigs(p), fullfile(outFolder, sprintf('Magnification_Report_page%d.pdf', p)), '-dpdf');
+    end
+    fprintf('Report saved as separate pages (Magnification_Report_page*.pdf).\n');
+end
+
+close(allFigs);
+
 fprintf('\nResults saved to:\n%s\n', outFolder);
 
 
@@ -540,6 +878,83 @@ if isempty(fieldList)
 else
     t = "field(s) " + strjoin(string(fieldList), ", ");
 end
+end
+
+function fig = newA4Page()
+% Blank A4 portrait page (21 x 29.7 cm). Invisible, so its size is not
+% limited by the screen.
+fig = figure('Visible', 'off', 'Color', 'w', 'Units', 'centimeters', ...
+    'Position', [1 1 21 29.7], 'PaperUnits', 'centimeters', ...
+    'PaperSize', [21 29.7], 'PaperPosition', [0 0 21 29.7]);
+end
+
+function fig = textPage(titleText, lines, fontName, fontSize)
+% A4 page with a title and wrapped text (one cell per paragraph/line).
+% Arial / Courier New are set explicitly: the default font has no Turkish glyphs in the PDF
+fig = newA4Page();
+annotation(fig, 'textbox', [0.08 0.89 0.84 0.05], 'String', titleText, ...
+    'FontName', 'Arial', 'FontSize', 14, 'FontWeight', 'bold', 'EdgeColor', 'none', ...
+    'Interpreter', 'none', 'VerticalAlignment', 'top');
+annotation(fig, 'textbox', [0.08 0.06 0.84 0.83], 'String', lines, ...
+    'FontName', fontName, 'FontSize', fontSize, 'EdgeColor', 'none', ...
+    'Interpreter', 'none', 'VerticalAlignment', 'top', 'FitBoxToText', 'off');
+end
+
+function fig = figurePage(srcFig, titleText, captionLines, squareAxes)
+% A4 page: title, the axes of srcFig (copied with their legends, stacked
+% top to bottom) and an explanation text below them.
+fig = newA4Page();
+annotation(fig, 'textbox', [0.08 0.89 0.84 0.05], 'String', titleText, ...
+    'FontName', 'Arial', 'FontSize', 14, 'FontWeight', 'bold', 'EdgeColor', 'none', ...
+    'Interpreter', 'none', 'VerticalAlignment', 'top');
+
+srcAx = findobj(srcFig, 'Type', 'axes');
+yPos = arrayfun(@(a) a.Position(2), srcAx);
+[~, order] = sort(yPos, 'descend');
+srcAx = srcAx(order);
+
+% Plot area: y = 0.33 ... 0.87 of the page, the text below it
+nAx = numel(srcAx);
+areaBottom = 0.34;
+areaTop = 0.86;
+slot = (areaTop - areaBottom) / nAx;
+for i = 1:nAx
+    a = srcAx(i);
+    if ~isempty(a.Legend)
+        copied = copyobj([a.Legend, a], fig);
+    else
+        copied = copyobj(a, fig);
+    end
+    newAx = findobj(copied, 'Type', 'axes');
+    newAx.Units = 'normalized';
+    newAx.Position = [0.13, areaTop - i * slot + 0.05, 0.80, slot - 0.08];
+    newAx.FontSize = 8;
+    newAx.Title.FontSize = 9;
+    if squareAxes
+        pbaspect(newAx, [1 1 1]);
+    end
+end
+
+annotation(fig, 'textbox', [0.08 0.05 0.84 0.25], 'String', captionLines, ...
+    'FontName', 'Arial', 'FontSize', 9.5, 'EdgeColor', 'none', ...
+    'Interpreter', 'none', 'VerticalAlignment', 'top', 'FitBoxToText', 'off');
+end
+
+function addPageFrame(fig, headerText, pageNo, nPages)
+% Header, footer with page number and an almost-white page border. The
+% border keeps the whole A4 page when exportgraphics crops to the content.
+ax = axes(fig, 'Position', [0 0 1 1], 'Visible', 'off', 'XLim', [0 1], 'YLim', [0 1]);
+hold(ax, 'on');
+plot(ax, [0.001 0.999 0.999 0.001 0.001], [0.001 0.001 0.999 0.999 0.001], ...
+    '-', 'Color', [0.995 0.995 0.995], 'LineWidth', 0.5);
+plot(ax, [0.06 0.94], [0.965 0.965], '-', 'Color', [0.6 0.6 0.6], 'LineWidth', 0.5);
+plot(ax, [0.06 0.94], [0.035 0.035], '-', 'Color', [0.6 0.6 0.6], 'LineWidth', 0.5);
+text(ax, 0.06, 0.970, headerText, 'FontName', 'Arial', 'FontSize', 8, 'Color', [0.4 0.4 0.4], ...
+    'VerticalAlignment', 'bottom', 'Interpreter', 'none');
+text(ax, 0.94, 0.030, sprintf('Sayfa %d / %d', pageNo, nPages), 'FontName', 'Arial', 'FontSize', 8, ...
+    'Color', [0.4 0.4 0.4], 'HorizontalAlignment', 'right', 'VerticalAlignment', 'top', ...
+    'Interpreter', 'none');
+hold(ax, 'off');
 end
 
 function saveFigure(fig, fileName)
