@@ -65,6 +65,9 @@
 %   Magnification_Results.xlsx  : "Summary", "Percentiles", sistem başına dosya
 %                                 tabloları, "Pairs" (tüm çiftler), "Settings"
 %   Magnification_Data.mat      : tüm ham veriler
+%   *.fig                       : grafiklerin düzenlenebilir MATLAB dosyaları
+%   Analysis_Summary.txt        : özet ve sonuç / değerlendirme metni
+%   Analysis_Log.txt            : Command Window çıktısının tamamı
 %   Magnification_Report.pdf    : A4 rapor; özet, otomatik sonuç / değerlendirme,
 %                                 yöntem, istatistiklerin anlamı ve her grafik için
 %                                 "nasıl okunur / nasıl yorumlanır" açıklaması
@@ -72,6 +75,14 @@
 clc;
 clear;
 close all;
+
+% Command Window log; copied to the output folder at the end
+diary off;
+logFile = fullfile(tempdir, 'Magnification_Analysis_Log.txt');
+if isfile(logFile)
+    delete(logFile);
+end
+diary(logFile);
 
 %% User settings
 sysName         = ["MWIR", "OLED"];  % system 1, system 2
@@ -752,7 +763,30 @@ end
 
 close(allFigs);
 
+%% Text summary of the results (same text as the summary and assessment pages)
+summaryFile = fullfile(outFolder, 'Analysis_Summary.txt');
+fid = fopen(summaryFile, 'w', 'n', 'UTF-8');
+if fid > 0
+    fprintf(fid, '%s\r\n', 'BÜYÜTME TOLERANS ANALİZ ÖZETİ', '');
+    fprintf(fid, '%s\r\n', summaryLines{:});
+    fprintf(fid, '\r\n%s\r\n\r\n', 'SONUÇ VE DEĞERLENDİRME');
+    fprintf(fid, '%s\r\n', assess{:});
+    fclose(fid);
+end
+
+%% List of saved outputs; the Command Window log is copied last
 fprintf('\nResults saved to:\n%s\n', outFolder);
+saved = dir(outFolder);
+saved = saved(~[saved.isdir]);
+fprintf('  %s\n', saved.name);
+fprintf('  Analysis_Log.txt\n');
+
+diary off;
+try
+    copyfile(logFile, fullfile(outFolder, 'Analysis_Log.txt'));
+catch logErr
+    fprintf('Command Window log could not be copied: %s\n', logErr.message);
+end
 
 
 %% Local functions
@@ -958,11 +992,14 @@ hold(ax, 'off');
 end
 
 function saveFigure(fig, fileName)
+% PNG (300 dpi) and an editable MATLAB .fig with the same name
 try
     exportgraphics(fig, fileName, 'Resolution', 300);   % R2020a+
 catch
     saveas(fig, fileName);
 end
+[folder, name] = fileparts(fileName);
+savefig(fig, fullfile(folder, [name '.fig']));
 end
 
 function m = fileMetric(T, S, fieldList)
