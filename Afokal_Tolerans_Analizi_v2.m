@@ -30,9 +30,10 @@
 %    - MTF'e tek frekans yerine birden fazla frekansta bakilir (varsayilan
 %      Nyquist/2 ve Nyquist). Nyquist'te MTF dusuk oldugu icin tek basina
 %      guvenilir bir olcut degildir.
-%    - Parca 1 MTF kosulu: izin verilen dusus = max(goreli dusus x nominal MTF,
-%      mutlak alt sinir). Mutlak alt sinir, dusuk MTF'te hesap gurultusunun
-%      pencereyi belirlemesini onler.
+%    - Parca 1 MTF kosuluna sadece Nyquist/2'de bakilir (ayar.B.kosulFrek);
+%      Nyquist sadece raporlanir. Izin verilen dusus = max(goreli dusus x
+%      nominal MTF, mutlak alt sinir). Mutlak alt sinir, dusuk MTF'te hesap
+%      gurultusunun pencereyi belirlemesini onler.
 %    - Parca 2'de MC dosyalarinin gercek MTF'i hesaplanir ve karara girer.
 %    - Karar uc kontrolu ayri ayri raporlar.
 %
@@ -76,6 +77,8 @@ ayar.B.kompOnSurf  = 0;      % 0 = otomatik (dosyadaki tek DEGISKEN kalinlik = o
 ayar.B.guc         = linspace(-0.5, 0.5, 21);   % Paraxial yuzeye verilecek guc adimlari [1/m]
                              % (sadece tarama girdisi: f_paraxial = 1000/guc mm. Sonuclar mm cinsindendir.
                              %  Pencere tarama sinirina dayanirsa araligi genislet.)
+ayar.B.kosulFrek   = 0.5;    % MTF dusus kosulunun bakildigi frekans(lar), Nyquist'in kati (0.5 = Nyquist/2).
+                             % ayar.mtfFrek icinde olmali. Diger frekanslar sadece raporlanir.
 ayar.B.mtfDusus    = 0.05;   % kabul edilen GORELI MTF dususu (0.05 = nominal MTF'in %5'i)
 ayar.B.mtfDususMin = 0.01;   % kabul edilen en kucuk MUTLAK MTF dususu (gurultuye karsi alt sinir)
 % calistir = false iken: Parca 1 her kosuda sonucunu cikti klasorundeki <cikti>_parca1.mat
@@ -95,6 +98,10 @@ ayar.A.verimHedef  = 90;        % [%] sartlari saglamasi istenen MC dosyasi oran
 izinStrok = ayar.strok - ayar.termal;   % toleranslara kalan strok
 if izinStrok <= 0, error('ayar.termal, ayar.strok''tan kucuk olmali.'); end
 nFrek = numel(ayar.mtfFrek);
+kosulVar = ismembertol(ayar.mtfFrek(:), ayar.B.kosulFrek(:), 1e-9);   % kosula giren frekanslar
+if ~any(kosulVar) || nnz(kosulVar) ~= numel(unique(ayar.B.kosulFrek))
+    error('ayar.B.kosulFrek icindeki her frekans ayar.mtfFrek icinde de olmali.');
+end
 if ~isempty(ayar.A.mtfSart) && numel(ayar.A.mtfSart) ~= nFrek
     error('ayar.A.mtfSart, ayar.mtfFrek ile ayni sayida deger icermeli (%d).', nFrek);
 end
@@ -225,7 +232,10 @@ if ayar.B.calistir
     for k = 1:n
         vT = reshape(mtfT(k,:,:), nFrek, nAlan);
         vS = reshape(mtfS(k,:,:), nFrek, nAlan);
-        okMTF(k) = all(nomT(:) - vT(:) <= izinT(:)) && all(nomS(:) - vS(:) <= izinS(:));
+        % Kosul sadece ayar.B.kosulFrek frekanslarinda aranir (varsayilan Nyquist/2)
+        dT = nomT(kosulVar,:) - vT(kosulVar,:);
+        dS = nomS(kosulVar,:) - vS(kosulVar,:);
+        okMTF(k) = all(dT <= izinT(kosulVar,:), 'all') && all(dS <= izinS(kosulVar,:), 'all');
         mtfMin(k,:) = min([vT vS], [], 2)';
     end
     okStrok = abs(dzB) <= izinStrok;

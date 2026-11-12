@@ -5,9 +5,12 @@
 %  PARCA 1 - KAPASITE (Dosya B, paraxial yuzeyli dosya)
 %    Kolime bosluktaki Paraxial yuzeyin gucu adim adim degistirilerek yapay
 %    afokallik hatasi verilir, her adimda kompanzator optimize edilir ve
-%    kompanzatorun hareketi (dz) ile Nyquist'teki MTF okunur.
+%    kompanzatorun hareketi (dz) ile Nyquist/2'deki MTF okunur.
 %    Cikti: kabul penceresi [mm] = kompanzatorun, hem strok hem MTF kosulunu
-%    saglayarak duzeltebildigi hareket araligi.
+%    saglayarak duzeltebildigi hareket araligi. MTF kosulu: Nyquist/2'deki
+%    (ayar.mtfFrek) MTF, hatasiz durumdaki degerin %5'inden (ayar.mtfDusus)
+%    fazla dusmemeli. Nyquist'te MTF cok dusuk oldugu icin olcut olarak
+%    kullanilmaz.
 %
 %  PARCA 2 - IHTIYAC (Dosya A'nin Monte Carlo dosyalari)
 %    Zemax'te sadece afokal grubun ic toleranslariyla kosulan Monte Carlo'nun
@@ -41,6 +44,7 @@ ayar.pikselUm  = 15;     % dedektor piksel araligi [um]
 ayar.strok     = 0.50;   % [mm] kompanzatorun toplam mekanik stroku, +/-
 ayar.termal    = 0.00;   % [mm] bu stroktan termal duzeltme icin ayrilan pay, +/-
 ayar.mtfDusus  = 0.05;   % Parca 1'de kabul edilen goreli MTF dususu (0.05 = %5)
+ayar.mtfFrek   = 0.5;    % MTF dususune bakilan frekans, Nyquist'in kati (0.5 = Nyquist/2)
 ayar.cekirdek  = 8;      % optimizasyon cekirdek sayisi
 ayar.cikti     = 'afokal_tolerans_sonuc';   % cikti dosyalarinin on adi
 
@@ -156,12 +160,14 @@ if ayar.B.calistir
     sK.ThicknessCell.MakeSolveVariable();
 
     [fNyq, birim] = nyquist(ayar);
+    fOlc = ayar.mtfFrek * fNyq;   % MTF kosulunun bakildigi frekans
     nAlan = TheSystem.SystemData.Fields.NumberOfFields;
     guc = unique([ayar.B.guc(:); 0]);          % [1/m], 0 = hatasiz durum
     n = numel(guc);  i0 = find(guc == 0);
     fPar = 1000 ./ guc;  fPar(i0) = 1e10;      % Paraxial yuzeyin odak uzakligi [mm]
     dzB = nan(n,1);  mtfT = nan(n,nAlan);  mtfS = nan(n,nAlan);
-    fprintf('Nyquist: %.3f %s | Alan: %d | Nokta: %d\n\n', fNyq, birim, nAlan, n);
+    fprintf('Nyquist: %.3f %s | MTF kosulu: %.3f %s (%g x Nyquist) | Alan: %d | Nokta: %d\n\n', ...
+        fNyq, birim, fOlc, birim, ayar.mtfFrek, nAlan, n);
 
     % --- Tarama ---
     for k = 1:n
@@ -169,7 +175,7 @@ if ayar.B.calistir
         sK.Thickness = T0;            % her adimda nominalden basla
         optimizeEt(TheSystem, ayar.cekirdek);
         dzB(k) = sK.Thickness - T0;
-        [mtfT(k,:), mtfS(k,:)] = mtfOku(TheSystem, fNyq, nAlan);
+        [mtfT(k,:), mtfS(k,:)] = mtfOku(TheSystem, fOlc, nAlan);
         fprintf('adim %2d / %d | f_paraxial = %+12.1f mm | dz = %+8.4f mm | MTF_T(alan1) = %.3f\n', ...
             k, n, fPar(k), dzB(k), mtfT(k,1));
     end
@@ -217,7 +223,7 @@ if ayar.B.calistir
     xline(pencere(1), 'g-', 'LineWidth', 2, 'HandleVisibility', 'off');
     xline(pencere(2), 'g-', 'kabul penceresi', 'LineWidth', 2, 'HandleVisibility', 'off');
     xlabel('Kompanzator hareketi \Deltaz_{komp} [mm]'); ylabel('MTF / MTF_{nominal}');
-    title(sprintf('Kapasite: kompanzasyon sonrasi MTF @ %.3f %s', fNyq, birim));
+    title(sprintf('Kapasite: kompanzasyon sonrasi MTF @ %.3f %s (%g x Nyquist)', fOlc, birim, ayar.mtfFrek));
     legend('Location', 'bestoutside');
     resimKaydet(gcf, [cikti '_parca1_MTF.png']);
 else
