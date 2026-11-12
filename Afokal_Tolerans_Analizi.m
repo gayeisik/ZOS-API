@@ -32,7 +32,11 @@
 %
 % 0 birakilan yuzey numaralari otomatik bulunur ve ekrana yazdirilir.
 %
-% Not: Turkce karakter kullanilmadi (eski MATLAB surumlerinde kodlama sorunu olmasin diye).
+% CIKTI: CSV tablolari, grafik resimleri (PNG) ve A4 sayfalardan olusan PDF rapor
+%    (<cikti>_rapor.pdf): ozet ve sonuclar, analiz yontemi, sonuclarin yorumu, grafikler.
+%
+% Not: Kod ve yorumlarda Turkce karakter kullanilmadi; sadece PDF rapor metinlerinde
+%    kullanildi (dosya UTF-8 kayitli olmali, MATLAB R2020a ve sonrasi).
 
 clc; clear; close all;
 
@@ -118,6 +122,10 @@ if ayar.A.calistir
     fprintf('Dosya A: %s\n', dosyaA);
 end
 
+raporEksen = gobjects(0, 1);   % PDF rapora girecek grafik eksenleri
+sonucLog = {};                 % PDF rapora girecek sonuc metni
+sinirMetin = '-';              % kabul penceresini sinirlayan kosul
+
 %% ===================== PARCA 1: KAPASITE =====================
 if ayar.B.calistir
     fprintf('\n========== PARCA 1: PARAXIAL TARAMA (Dosya B) ==========\n');
@@ -195,10 +203,13 @@ if ayar.B.calistir
     fprintf('\nKabul penceresi (kompanzator hareketi): %+.4f ... %+.4f mm', pencere(1), pencere(2));
     if pencereAlt, fprintf('  (tarama sinirina dayandi: gercek pencere DAHA GENIS)'); end
     fprintf('\n');
-    if lo > 1 || hi < n
+    if pencereAlt
+        sinirMetin = 'tarama sınırı (gerçek pencere daha geniş)';
+    elseif lo > 1 || hi < n
         sebepler = {'strok', 'MTF'};
-        fprintf('Pencereyi sinirlayan: %s\n', strjoin(sebepler([any(~okStrok) any(~okMTF)]), ' + '));
+        sinirMetin = strjoin(sebepler([any(~okStrok) any(~okMTF)]), ' + ');
     end
+    fprintf('Pencereyi sinirlayan: %s\n', sinirMetin);
 
     T1 = table(dzB, fPar, okStrok, okMTF, 'VariableNames', {'dz_komp_mm', 'f_paraxial_mm', 'Strok_OK', 'MTF_OK'});
     for a = 1:nAlan
@@ -225,6 +236,7 @@ if ayar.B.calistir
     xlabel('Kompanzator hareketi \Deltaz_{komp} [mm]'); ylabel('MTF / MTF_{nominal}');
     title(sprintf('Kapasite: kompanzasyon sonrasi MTF @ %.3f %s (%g x Nyquist)', fOlc, birim, ayar.mtfFrek));
     legend('Location', 'bestoutside');
+    raporEksen = [raporEksen; flipud(findobj(gcf, 'Type', 'axes'))];
     resimKaydet(gcf, [cikti '_parca1_MTF.png']);
 else
     if ~isempty(ayar.B.pencere)
@@ -307,31 +319,31 @@ st.p95    = yuzdelik(absDz, 95);
 st.max    = max(absDz);
 st.icinde = mean(icinde) * 100;
 
-fprintf('\n===== KOMPANZATOR HAREKETI (%d MC kosusu) =====\n', numel(dzA));
-fprintf('Kabul penceresi   : %+.4f ... %+.4f mm\n', pencere(1), pencere(2));
-fprintf('Ortalama          : %+.4f mm\n', st.ort);
-fprintf('Std sapma (1s)    : %.4f mm\n', st.sigma);
-fprintf('%%95 |dz|          : %.4f mm\n', st.p95);
-fprintf('En buyuk |dz|     : %.4f mm (+ termal %.2f = %.4f / strok %.2f)\n', ...
+sonucLog = logYaz(sonucLog, '\n===== KOMPANZATOR HAREKETI (%d MC kosusu) =====\n', numel(dzA));
+sonucLog = logYaz(sonucLog, 'Kabul penceresi   : %+.4f ... %+.4f mm\n', pencere(1), pencere(2));
+sonucLog = logYaz(sonucLog, 'Ortalama          : %+.4f mm\n', st.ort);
+sonucLog = logYaz(sonucLog, 'Std sapma (1s)    : %.4f mm\n', st.sigma);
+sonucLog = logYaz(sonucLog, '%%95 |dz|          : %.4f mm\n', st.p95);
+sonucLog = logYaz(sonucLog, 'En buyuk |dz|     : %.4f mm (+ termal %.2f = %.4f / strok %.2f)\n', ...
         st.max, ayar.termal, st.max + ayar.termal, ayar.strok);
-fprintf('Pencere icinde kalan kosu orani: %%%.1f\n', st.icinde);
+sonucLog = logYaz(sonucLog, 'Pencere icinde kalan kosu orani: %%%.1f\n', st.icinde);
 
 %% ===================== KARAR =====================
-fprintf('\n===== KARAR =====\n');
+sonucLog = logYaz(sonucLog, '\n===== KARAR =====\n');
 strokOK = st.max + ayar.termal <= ayar.strok;
 if st.icinde == 100 && strokOK
-    fprintf('EVET: Tum MC kosularinda kompanzator hareketi kabul penceresinin icinde.\n');
+    sonucLog = logYaz(sonucLog, 'EVET: Tum MC kosularinda kompanzator hareketi kabul penceresinin icinde.\n');
 elseif st.icinde >= 95 && strokOK
-    fprintf('BUYUK OLCUDE EVET: Kosularin %%%.1f''i pencere icinde. Disaridakileri kontrol et.\n', st.icinde);
+    sonucLog = logYaz(sonucLog, 'BUYUK OLCUDE EVET: Kosularin %%%.1f''i pencere icinde. Disaridakileri kontrol et.\n', st.icinde);
 elseif pencereAlt
-    fprintf(['BELIRSIZ: Bazi kosular bilinen pencerenin disinda ama pencere tarama sinirina dayanmisti.\n' ...
+    sonucLog = logYaz(sonucLog, ['BELIRSIZ: Bazi kosular bilinen pencerenin disinda ama pencere tarama sinirina dayanmisti.\n' ...
              'Parca 1''de ayar.B.guc araligini genisletip tekrar calistir.\n']);
 else
-    fprintf(['HAYIR: Gereken kompanzator hareketi kompanzatorun kapasitesini asiyor (pencere icinde %%%.1f).\n' ...
+    sonucLog = logYaz(sonucLog, ['HAYIR: Gereken kompanzator hareketi kompanzatorun kapasitesini asiyor (pencere icinde %%%.1f).\n' ...
              'Sensitivity raporunda en buyuk kompanzator degerini veren toleranslari sikilastir ya da stroku artir.\n'], st.icinde);
 end
 if ~strokOK
-    fprintf('UYARI: Kompanzator hareketi + termal pay stroku asiyor.\n');
+    sonucLog = logYaz(sonucLog, 'UYARI: Kompanzator hareketi + termal pay stroku asiyor.\n');
 end
 
 T2 = table(string(mcAd(:)), dzA, icinde, 'VariableNames', {'Dosya', 'dz_komp_mm', 'Pencere_Icinde'});
@@ -345,6 +357,7 @@ xline(pencere(1), 'g-', 'LineWidth', 2); xline(pencere(2), 'g-', 'kabul penceres
 xline(-st.p95, 'm--'); xline(st.p95, 'm--', '%95');
 xlabel('Kompanzator hareketi \Deltaz_{komp} [mm]'); ylabel('Kosu sayisi');
 title(sprintf('Ihtiyac vs kapasite: %%%.1f pencere icinde', st.icinde));
+raporEksen = [raporEksen; flipud(findobj(gcf, 'Type', 'axes'))];
 resimKaydet(gcf, [cikti '_parca2_dagilim.png']);
 
 figure('Name', 'Parca 2 - Kompanzator hareketi');
@@ -353,9 +366,241 @@ yline(izinStrok, 'r--', 'strok (termal dusulmus)'); yline(-izinStrok, 'r--');
 yline(pencere(1), 'g-', 'LineWidth', 1.5); yline(pencere(2), 'g-', 'kabul penceresi', 'LineWidth', 1.5);
 xlabel('MC kosusu'); ylabel('\Deltaz_{komp} [mm]');
 title('Her MC kosusunda kompanzator hareketi');
+raporEksen = [raporEksen; flipud(findobj(gcf, 'Type', 'axes'))];
 resimKaydet(gcf, [cikti '_parca2_hareket.png']);
 
+%% ===================== PDF RAPOR =====================
+% Rapor metinlerinde Turkce karakter kullanilir (Arial ile yazilir).
+try
+    [fNyqR, birimR] = nyquist(ayar);
+    if isempty(dosyaB), dosyaBMetin = '(Parça 1 bu koşuda çalışmadı; kayıtlı pencere kullanıldı)'; else, dosyaBMetin = dosyaB; end
+
+    ozet = {
+        sprintf('Tarih:                 %s', char(datetime('now', 'Format', 'dd.MM.yyyy HH:mm')))
+        sprintf('Klasör:                %s', klasor)
+        sprintf('Dosya A (nominal):     %s', dosyaA)
+        sprintf('Dosya B (paraxial):    %s', dosyaBMetin)
+        sprintf('MC dosyaları:          %s*  (geçerli: %d / %d)', ayar.A.mcOnek, numel(dzA), nMC)
+        ''
+        'AYARLAR'
+        sprintf('Kompanzatör stroku:    ±%.3f mm  (termal pay ±%.3f mm, toleranslara kalan ±%.3f mm)', ayar.strok, ayar.termal, izinStrok)
+        sprintf('Piksel aralığı:        %g µm   Nyquist: %.3f %s', ayar.pikselUm, fNyqR, birimR)
+        sprintf('MTF koşulu:            %g x Nyquist frekansında, hatasız değerin en fazla %%%g altı', ayar.mtfFrek, 100 * ayar.mtfDusus)
+        ''
+        'PARÇA 1 SONUCU'
+        sprintf('Kabul penceresi:       %+.4f ... %+.4f mm (kompanzatör hareketi)', pencere(1), pencere(2))
+        sprintf('Pencereyi sınırlayan:  %s', sinirMetin)
+        ''
+        'PARÇA 2 SONUCU VE KARAR (program çıktısı)'
+        };
+    ozet = [ozet; cellstr(splitlines(strtrim(strjoin(string(sonucLog), ''))))];
+    ozetSayfa = textPage('AFOKAL TOLERANS ANALİZİ RAPORU', ozet, 'Courier New', 8.5);
+
+    yontem = {
+        'AMAÇ'
+        ['Bu analiz şu soruya cevap arar: Afokal grubun (extender) toleranslardan kaynaklanan bozulmasını ' ...
+         'objektifteki odak kompanzatörü düzeltmeye yetiyor mu? Soru iki parçada ele alınır: kompanzatörün ' ...
+         'ne kadarını düzeltebildiği (kapasite) ve toleransların ne kadar düzeltme gerektirdiği (ihtiyaç). ' ...
+         'Tüm sonuçlar kompanzatör hareketi (mm) cinsindendir.']
+        ''
+        'DOSYALAR'
+        '•  Dosya B: Tasarımın, kolime boşluğa (extender ile objektif arasına) bir Paraxial yüzey eklenmiş kopyası.'
+        '•  Dosya A: Monte Carlo analizinin koşulduğu nominal dosya.'
+        '•  MC dosyaları: Zemax''in Monte Carlo sırasında kaydettiği, kompanzatörü optimize edilmiş dosyalar.'
+        ''
+        'PARÇA 1 – KAPASİTE (Dosya B)'
+        ['Paraxial yüzeyin gücü adım adım değiştirilir. Bu, extender''ın çıkışının kolime olmaktan çıkmasını, ' ...
+         'yani afokalliğin bozulmasını taklit eder; yalnızca odak hatası üretir, başka aberasyon katmaz. ' ...
+         'Her adımda kompanzatör yeniden optimize edilir ve iki değer okunur: kompanzatörün ne kadar hareket ' ...
+         'ettiği ve MTF.']
+        sprintf(['Her adım iki koşula göre değerlendirilir: (1) Hareket, stroktan termal pay düşüldükten sonra ' ...
+         'kalan ±%.3f mm''yi aşmamalı. (2) %g x Nyquist frekansındaki MTF, tüm fieldlerde ve iki yönde (T, S), ' ...
+         'hatasız durumdaki değerin en fazla %%%g altına düşmeli. Hatasız durumdan başlayıp iki koşul da ' ...
+         'sağlandığı sürece iki yöne genişleyen kompanzatör hareketi aralığı "kabul penceresi"dir.'], ...
+         izinStrok, ayar.mtfFrek, 100 * ayar.mtfDusus)
+        ''
+        'PARÇA 2 – İHTİYAÇ (Dosya A ve MC dosyaları)'
+        ['Dosya A''dan kompanzatörün nominal kalınlığı okunur. Her MC dosyası açılır ve kompanzatörün o ' ...
+         'dosyadaki değeri okunur; hareket = MC değeri − nominal değerdir. Toleranslama MC dosyalarına yeni ' ...
+         'yüzeyler (coordinate break) eklediği için yüzey numaraları nominal dosyadan farklıdır; bu yüzden ' ...
+         'kompanzatör her MC dosyasında kalınlığı variable olan tek yüzey olarak ayrı bulunur. Bu parçada ' ...
+         'optimizasyon ve MTF hesabı yapılmaz.']
+        ''
+        'KARAR'
+        ['MC dosyalarındaki kompanzatör hareketleri kabul penceresiyle karşılaştırılır. Hepsi pencere içindeyse ' ...
+         've strok yetiyorsa sonuç EVET; en az %95''i içindeyse BÜYÜK ÖLÇÜDE EVET; pencere tarama sınırına ' ...
+         'dayanmışsa BELİRSİZ; aksi halde HAYIR''dır.']
+        };
+    yontemSayfa = textPage('1. ANALİZ YÖNTEMİ', yontem, 'Arial', 10);
+
+    yorum = {
+        'KABUL PENCERESİ NASIL OKUNUR?'
+        sprintf(['Pencere, kompanzatörün MTF''i bozmadan ve stroku aşmadan düzeltebildiği hareket aralığıdır. ' ...
+         'Bu analizde pencere %+.4f ... %+.4f mm; pencereyi sınırlayan: %s.'], pencere(1), pencere(2), sinirMetin)
+        ['•  Sınırlayan "strok" ise kompanzatör optik olarak daha fazlasını düzeltebiliyor, ama mekanik hareket ' ...
+         'yetmiyor demektir. Stroku artırmak pencereyi genişletir.']
+        ['•  Sınırlayan "MTF" ise kompanzatör lensi çok hareket ettiğinde sistemin aberasyon dengesi bozuluyor ' ...
+         'demektir. Bu durumda stroku artırmak işe yaramaz.']
+        ['•  "Tarama sınırı" yazıyorsa pencere taranan aralığın ucuna dayanmıştır; gerçek pencere daha geniştir. ' ...
+         'ayar.B.guc aralığı genişletilip analiz tekrarlanmalıdır.']
+        ''
+        'KOMPANZATÖR HAREKETİ İSTATİSTİKLERİ'
+        sprintf(['Bu analizde %d MC dosyasında en büyük hareket %.4f mm, dosyaların %%95''inin altında kaldığı ' ...
+         'hareket %.4f mm, ortalama %+.4f mm, standart sapma %.4f mm''dir. Dosyaların %%%.1f''i pencere içindedir.'], ...
+         numel(dzA), st.max, st.p95, st.ort, st.sigma, st.icinde)
+        ['•  Ortalama sıfırdan belirgin uzaksa nominal dosyadaki kompanzatör tam optimumda değildir; tüm ' ...
+         'hareketlerde sabit bir kayma vardır.']
+        '•  En büyük hareket + termal pay stroku aşıyorsa rapor ayrıca uyarı verir.'
+        ''
+        'KARARIN ANLAMI VE SINIRLARI'
+        ['EVET kararı şunu söyler: toleransların gerektirdiği kompanzatör hareketi stroka sığıyor ve kompanzatör ' ...
+         'o kadar hareket ettiğinde kendi başına MTF''i bozmuyor. Bu GEREKLİ bir koşuldur, YETERLİ değildir:']
+        ['•  Parça 1 yalnızca saf odak hatasını sınar. Toleransların ürettiği koma, astigmatizma ve küresel ' ...
+         'aberasyonu kompanzatör düzeltemez; bunlar bu analizde görünmez. Kompanzasyon sonrası gerçek performans ' ...
+         'için MC dosyalarının MTF yield analizine (MTF_Yield_Analysis veya bu kodun V2 sürümü) bakılmalıdır.']
+        ['•  Sonuç, Monte Carlo''ya hangi toleransların konduğuna bağlıdır. Yalnızca extender''ın etkisini görmek ' ...
+         'için MC yalnızca extender toleranslarıyla koşulmuş olmalıdır; tüm sistem toleranslarıyla koşulduysa ' ...
+         'kompanzatör hareketi objektifin hatalarını da içerir.']
+        ''
+        'GRAFİKLER NASIL OKUNUR?'
+        ['•  Kapasite grafiği (Parça 1): Yatay eksen kompanzatör hareketi, dikey eksen hatasız duruma göre ' ...
+         'normalize MTF''tir (1 = değişim yok). Her renk bir field; düz çizgi T, kesikli çizgi S. Kırmızı yatay ' ...
+         'çizgi MTF eşiği, kırmızı dikey çizgiler strok, yeşil dikey çizgiler kabul penceresidir. Eğriler 1''e ' ...
+         'yakın ve yataysa kompanzatör odak hatasını temiz düzeltiyor demektir.']
+        ['•  Hareket dağılımı (Parça 2): MC dosyalarındaki kompanzatör hareketlerinin histogramı. Dağılımın ' ...
+         'tamamı yeşil çizgilerin (pencere) arasındaysa ihtiyaç kapasitenin içindedir. Mor kesikli çizgiler ' ...
+         '%95 sınırını gösterir.']
+        ['•  Her MC koşusunda hareket (Parça 2): Her nokta bir MC dosyasıdır. Kırmızı çizgilerin (strok) dışına ' ...
+         'çıkan noktalar kompanzatörün mekanik olarak yetişemediği durumlardır.']
+        };
+    yorumSayfa = textPage('2. SONUÇLARIN YORUMU', yorum, 'Arial', 10);
+
+    sayfalar = [ozetSayfa; yontemSayfa; yorumSayfa; grafikSayfalari(raporEksen)];
+    pdfYaz(sayfalar, [cikti '_rapor.pdf'], sprintf('Afokal Tolerans Analizi  |  %s', dosyaA));
+catch raporHata
+    warning('PDF rapor olusturulamadi (analiz sonuclari ve grafikler yazildi): %s', raporHata.message);
+end
+
 %% ===================== YARDIMCI FONKSIYONLAR =====================
+function kayit = logYaz(kayit, varargin)
+    % Metni ekrana yazar ve PDF raporu icin saklar
+    metin = sprintf(varargin{:});
+    fprintf('%s', metin);
+    kayit{end+1} = metin;
+end
+
+function fig = newA4Page()
+    % Bos A4 dikey sayfa (21 x 29.7 cm). Gorunmez: boyutu ekranla sinirlanmaz.
+    fig = figure('Visible', 'off', 'Color', 'w', 'Units', 'centimeters', ...
+        'Position', [1 1 21 29.7], 'PaperUnits', 'centimeters', ...
+        'PaperSize', [21 29.7], 'PaperPosition', [0 0 21 29.7]);
+end
+
+function addPageTitle(fig, baslik)
+    % Arial acikca verilir: varsayilan yazi tipinde Turkce harfler PDF'te bozulur
+    annotation(fig, 'textbox', [0.06 0.915 0.88 0.04], 'String', baslik, ...
+        'FontName', 'Arial', 'FontSize', 11, 'FontWeight', 'bold', 'HorizontalAlignment', 'center', ...
+        'VerticalAlignment', 'middle', 'EdgeColor', 'none', 'Interpreter', 'none');
+end
+
+function fig = textPage(baslik, satirlar, yaziTipi, punto)
+    % Baslik ve satir kaydirmali metin iceren A4 sayfa (her hucre bir paragraf)
+    fig = newA4Page();
+    annotation(fig, 'textbox', [0.08 0.89 0.84 0.05], 'String', baslik, ...
+        'FontName', 'Arial', 'FontSize', 14, 'FontWeight', 'bold', 'EdgeColor', 'none', ...
+        'Interpreter', 'none', 'VerticalAlignment', 'top');
+    annotation(fig, 'textbox', [0.08 0.06 0.84 0.83], 'String', satirlar, ...
+        'FontName', yaziTipi, 'FontSize', punto, 'EdgeColor', 'none', ...
+        'Interpreter', 'none', 'VerticalAlignment', 'top', 'FitBoxToText', 'off');
+end
+
+function addPageFrame(fig, ustBilgi, sayfaNo, nSayfa)
+    % Ust bilgi, sayfa numarasi ve neredeyse beyaz bir sayfa cercevesi. Cerceve,
+    % exportgraphics icerige gore kirparken tum A4 sayfanin korunmasini saglar.
+    ax = axes(fig, 'Position', [0 0 1 1], 'Visible', 'off', 'XLim', [0 1], 'YLim', [0 1]);
+    hold(ax, 'on');
+    plot(ax, [0.001 0.999 0.999 0.001 0.001], [0.001 0.001 0.999 0.999 0.001], ...
+        '-', 'Color', [0.995 0.995 0.995], 'LineWidth', 0.5);
+    plot(ax, [0.06 0.94], [0.965 0.965], '-', 'Color', [0.6 0.6 0.6], 'LineWidth', 0.5);
+    plot(ax, [0.06 0.94], [0.035 0.035], '-', 'Color', [0.6 0.6 0.6], 'LineWidth', 0.5);
+    text(ax, 0.06, 0.970, ustBilgi, 'FontName', 'Arial', 'FontSize', 8, 'Color', [0.4 0.4 0.4], ...
+        'VerticalAlignment', 'bottom', 'Interpreter', 'none');
+    text(ax, 0.94, 0.030, sprintf('Sayfa %d / %d', sayfaNo, nSayfa), 'FontName', 'Arial', 'FontSize', 8, ...
+        'Color', [0.4 0.4 0.4], 'HorizontalAlignment', 'right', 'VerticalAlignment', 'top', ...
+        'Interpreter', 'none');
+    hold(ax, 'off');
+end
+
+function figs = grafikSayfalari(eksenler)
+    % Ekrandaki grafiklerin eksenlerini A4 sayfalara kopyalar: her sayfada iki
+    % grafik (ust ve alt), hepsi ayni boyutta. Aciklama kutusu grafigin altina konur.
+    konum = {[0.14 0.61 0.72 0.26], [0.14 0.18 0.72 0.26]};
+    nS = ceil(numel(eksenler) / 2);
+    figs = gobjects(nS, 1);
+    for s = 1:nS
+        figs(s) = newA4Page();
+        addPageTitle(figs(s), sprintf('GRAFİKLER (%d / %d)', s, nS));
+        for p = 1:2
+            i = 2 * (s - 1) + p;
+            if i > numel(eksenler), break; end
+            kaynak = eksenler(i);
+            lgd = kaynak.Legend;
+            if isempty(lgd)
+                yeni = copyobj(kaynak, figs(s));
+                yeniLgd = [];
+            else
+                kopya = copyobj([lgd, kaynak], figs(s));
+                yeniLgd = kopya(1);  yeni = kopya(2);
+            end
+            if ~isempty(yeniLgd)
+                set(yeniLgd, 'Location', 'none', 'FontSize', 8, ...
+                    'NumColumns', min(6, max(1, numel(yeniLgd.String))));
+            end
+            set(yeni, 'Units', 'normalized', 'Position', konum{p}, 'FontSize', 9);
+            if ~isempty(yeniLgd)
+                yeniLgd.Units = 'normalized';
+                lp = yeniLgd.Position;
+                yeniLgd.Position = [konum{p}(1) + (konum{p}(3) - lp(3)) / 2, ...
+                    konum{p}(2) - 0.045 - lp(4), lp(3), lp(4)];
+            end
+        end
+    end
+end
+
+function pdfYaz(sayfalar, pdfDosya, ustBilgi)
+    % Sayfalara ust bilgi ve sayfa numarasi ekler, tek bir cok sayfali PDF yazar
+    nSayfa = numel(sayfalar);
+    for p = 1:nSayfa
+        addPageFrame(sayfalar(p), ustBilgi, p, nSayfa);
+    end
+
+    [klasor, ad] = fileparts(pdfDosya);
+    eski = dir(fullfile(klasor, [ad '_sayfa*.pdf']));
+    for i = 1:numel(eski), delete(fullfile(klasor, eski(i).name)); end
+    if isfile(pdfDosya), delete(pdfDosya); end
+    if isfile(pdfDosya)   % silinemedi: baska bir programda acik
+        pdfDosya = fullfile(klasor, [ad '_' char(datetime('now', 'Format', 'yyyyMMdd_HHmmss')) '.pdf']);
+        fprintf('Eski rapor baska bir programda acik; yeni rapor: %s\n', pdfDosya);
+    end
+
+    try
+        exportgraphics(sayfalar(1), pdfDosya, 'ContentType', 'vector');
+        for p = 2:nSayfa
+            exportgraphics(sayfalar(p), pdfDosya, 'ContentType', 'vector', 'Append', true);
+        end
+        fprintf('PDF rapor yazildi: %s\n', pdfDosya);
+    catch pdfHata
+        % Eski MATLAB (R2021b oncesi): her sayfa ayri PDF
+        fprintf('Cok sayfali PDF yazilamadi: %s\n', pdfHata.message);
+        if isfile(pdfDosya), delete(pdfDosya); end
+        for p = 1:nSayfa
+            print(sayfalar(p), fullfile(klasor, sprintf('%s_sayfa%d.pdf', ad, p)), '-dpdf');
+        end
+        fprintf('Rapor ayri sayfalar olarak yazildi (%s_sayfa*.pdf).\n', ad);
+    end
+    close(sayfalar);
+end
+
 function adlar = zmxDosyalari(klasor)
     % Klasordeki tum .zmx dosyalari (ayni dosya iki kez sayilmaz)
     d = [dir(fullfile(klasor, '*.zmx')); dir(fullfile(klasor, '*.ZMX'))];
