@@ -53,10 +53,6 @@
 %     - Dosya bazında geçme oranı: bir sistemin her dosyası diğer sistemin
 %       dosyalarının yüzde kaçıyla isteri sağlıyor
 %     - Nominal EFL'ler için diğer sistemin EFL'sine izin verilen aralık
-%     - Eşleştirmeli montaj: yield kümelerindeki sistemler, her biri en fazla
-%       bir kez kullanılarak, isteri sağlayacak şekilde en iyi eşleştirilirse
-%       çıkan en fazla ürün sayısı (kesin maksimum eşleştirme; eşit sayıda ürün
-%       veren eşleştirmeler arasından toplam |M - hedef| en küçük olan seçilir)
 %
 % AYARLAR (User settings)
 %   sysName, pixelPitch_um, nPixels, pixelScale, filePrefix, yieldPct,
@@ -67,13 +63,9 @@
 %   EFL_Pair_Map.png            : EFL_1 - EFL_2 düzleminde geçen / kalan çiftler
 %   PassRate_by_File.png        : her dosyanın diğer sistemle geçme oranı
 %   EFL_Distributions.png       : her sistemin EFL dağılımı (tümü ve yield kümesi)
-%   Matched_Assembly.png        : eşleştirmeli / rastgele montajda ürün sayısı ve
-%                                 eşleştirilen çiftlerin büyütmesi
 %   Magnification_Results.xlsx  : "Summary", "By Tolerance" (her tolerans bir
 %                                 sütun), "Percentiles", sistem başına dosya
-%                                 tabloları, "Matched tol ..." (ürün listesi),
-%                                 "Unmatched tol ..." (açıkta kalanlar),
-%                                 "Pairs" (tüm çiftler), "Settings"
+%                                 tabloları, "Pairs" (tüm çiftler), "Settings"
 %   Magnification_Data.mat      : tüm ham veriler
 %   *.fig                       : grafiklerin düzenlenebilir MATLAB dosyaları
 %   Analysis_Summary.txt        : özet ve sonuç / değerlendirme metni
@@ -223,31 +215,6 @@ for t = 1:nTol
     sys(2).passRate(sys(2).inYield, t) = tol(t).passRate2;
 end
 
-%% Matched assembly: the largest number of products from the yield sets
-% Every system is used at most once. The maximum matching is exact; among the
-% maximum matchings the one with the smallest total |M - target| is chosen.
-nMaxProducts = min(n1, n2);
-nMcRef = min(numel(sys(1).fileNames), numel(sys(2).fileNames));
-idx1 = find(sys(1).inYield);
-idx2 = find(sys(2).inYield);
-for s = 1:2
-    sys(s).partner = strings(numel(sys(s).fileNames), nTol);
-end
-for t = 1:nTol
-    [pairsIdx, method] = bestMatching(M, tol(t).pass, E1, E2, magTarget);
-    tol(t).matchPairs = pairsIdx;
-    tol(t).matchMethod = method;
-    tol(t).nMatched = size(pairsIdx, 1);
-    tol(t).matchPct = 100 * tol(t).nMatched / nMaxProducts;
-    tol(t).overallPct = 100 * tol(t).nMatched / nMcRef;
-    tol(t).randomProducts = tol(t).passPct / 100 * nMaxProducts;   % expected with random one-to-one assembly
-    tol(t).matchM = M(sub2ind(size(M), pairsIdx(:, 1), pairsIdx(:, 2)));
-    tol(t).unmatched1 = setdiff(1:n1, pairsIdx(:, 1)).';
-    tol(t).unmatched2 = setdiff(1:n2, pairsIdx(:, 2)).';
-    sys(1).partner(idx1(pairsIdx(:, 1)), t) = names2(pairsIdx(:, 2));
-    sys(2).partner(idx2(pairsIdx(:, 2)), t) = names1(pairsIdx(:, 1));
-end
-
 %% Command window summary
 fprintf('\n===== MAGNIFICATION ANALYSIS =====\n');
 fprintf('M = (|EFL_%s| / |EFL_%s|) x (%g x %g um / %g um) = %.6f x |EFL_1| / |EFL_2|\n', ...
@@ -274,10 +241,6 @@ for t = 1:nTol
         fprintf('%s files matching at least one / all files of the other system: %.1f %% / %.1f %%\n', ...
             sys(s).name, T.anyMatch(s), T.allMatch(s));
     end
-    fprintf('MATCHED ASSEMBLY: %d products from %d %s + %d %s = %.1f %% (random assembly: %.1f products)\n', ...
-        T.nMatched, n1, sys(1).name, n2, sys(2).name, T.matchPct, T.randomProducts);
-    fprintf('  Unmatched: %d %s, %d %s.  Overall: %d / %d MC = %.1f %%\n', numel(T.unmatched1), sys(1).name, ...
-        numel(T.unmatched2), sys(2).name, T.nMatched, nMcRef, T.overallPct);
 end
 
 %% Output folder: "BÜYÜTME ANALİZİ - %90 YIELD" in the system 1 folder
@@ -413,66 +376,6 @@ for s = 1:2
 end
 saveFigure(fig4, fullfile(outFolder, 'EFL_Distributions.png'));
 
-%% Figure 5: matched assembly (number of products and magnification of the matched pairs)
-fig5 = figure('Name', 'Matched Assembly', 'Color', 'w', 'Position', [180 180 950 760]);
-tolLabels = arrayfun(@(x) sprintf('\\pm%g', x), magTol, 'UniformOutput', false);
-
-subplot(2, 1, 1);
-barData = [[tol.randomProducts].', [tol.nMatched].'];
-if nTol == 1
-    hb = bar([1 2], [barData; nan nan]);   % a single group needs a dummy row
-    xlim([0.5 1.5]);
-else
-    hb = bar(1:nTol, barData);
-end
-hb(1).FaceColor = [0.75 0.75 0.75];
-hb(2).FaceColor = colBlue;
-hb(1).DisplayName = 'Random assembly (expected)';
-hb(2).DisplayName = 'Matched assembly (best)';
-hold on;
-yline(nMaxProducts, '--k', sprintf('%d available pairs', nMaxProducts), 'LineWidth', 1.2, ...
-    'LabelHorizontalAlignment', 'left', 'HandleVisibility', 'off');
-try   % value labels on the bars (R2019b+)
-    for b = 1:2
-        for t = 1:nTol
-            text(hb(b).XEndPoints(t), hb(b).YEndPoints(t), sprintf('%.0f', barData(t, b)), ...
-                'HorizontalAlignment', 'center', 'VerticalAlignment', 'bottom', 'FontSize', 9);
-        end
-    end
-catch
-end
-hold off;
-set(gca, 'XTick', 1:nTol, 'XTickLabel', tolLabels);
-ylim([0 nMaxProducts * 1.15]);
-xlabel('Magnification tolerance');
-ylabel('Number of products');
-title(sprintf('Products from %d %s + %d %s (%g%% MTF yield sets)', n1, sys(1).name, n2, sys(2).name, yieldPct));
-legend(hb, 'Location', 'southeast');
-grid on;
-
-subplot(2, 1, 2);
-hold on;
-for t = nTol:-1:1
-    yline(tol(t).low, '--', 'Color', tolColors(t, :), 'LineWidth', 1.1, 'HandleVisibility', 'off');
-    yline(tol(t).high, '--', 'Color', tolColors(t, :), 'LineWidth', 1.1, 'HandleVisibility', 'off');
-end
-yline(magTarget, '-k', 'HandleVisibility', 'off');
-for t = 1:nTol
-    if tol(t).nMatched > 0
-        plot(E1(tol(t).matchPairs(:, 1)), tol(t).matchM, tolMarkers{mod(t - 1, numel(tolMarkers)) + 1}, ...
-            'Color', tolColors(t, :), 'MarkerFaceColor', tolColors(t, :), 'MarkerSize', 5, ...
-            'DisplayName', sprintf('\\pm%g: %d products', tol(t).tol, tol(t).nMatched));
-    end
-end
-hold off;
-xlabel(eflLabel(1));
-ylabel('Magnification M of the matched pair');
-title('Magnification of the matched pairs (dashed: tolerance limits)');
-legend('Location', 'best');
-grid on;
-box on;
-saveFigure(fig5, fullfile(outFolder, 'Matched_Assembly.png'));
-
 %% Export Excel
 outputFile = fullfile(outFolder, 'Magnification_Results.xlsx');
 
@@ -505,21 +408,14 @@ byTolNames = [ ...
     "Allowed |EFL| " + sys(2).name + " min (nominal " + sys(1).name + ")"; ...
     "Allowed |EFL| " + sys(2).name + " max (nominal " + sys(1).name + ")"; ...
     "Allowed |EFL| " + sys(1).name + " min (nominal " + sys(2).name + ")"; ...
-    "Allowed |EFL| " + sys(1).name + " max (nominal " + sys(2).name + ")"; ...
-    "Matched assembly: products"; "Matched assembly: products / available pairs"; ...
-    "Matched assembly: products / MC files"; "Random assembly: expected products"; ...
-    "Unmatched " + sys(1).name; "Unmatched " + sys(2).name; ...
-    "Matched pairs: min M"; "Matched pairs: max M"];
-byTolUnits = [""; ""; ""; "count"; "%"; "%"; "%"; ""; ""; "%"; "%"; "%"; "%"; "%"; "%"; "mm"; "mm"; "mm"; "mm"; ...
-    "count"; "%"; "%"; "count"; "count"; "count"; ""; ""];
+    "Allowed |EFL| " + sys(1).name + " max (nominal " + sys(2).name + ")"];
+byTolUnits = [""; ""; ""; "count"; "%"; "%"; "%"; ""; ""; "%"; "%"; "%"; "%"; "%"; "%"; "mm"; "mm"; "mm"; "mm"];
 byTol = table(byTolNames, byTolUnits, 'VariableNames', {'Parameter', 'Unit'});
 for t = 1:nTol
     T = tol(t);
     byTol.(['Tol_' tolTag(T.tol)]) = [T.tol; T.low; T.high; T.nPass; T.passPct; T.belowPct; T.abovePct; ...
         T.Cp; T.Cpk; T.normPassPct; T.centeredPassPct; T.anyMatch(1); T.allMatch(1); T.anyMatch(2); ...
-        T.allMatch(2); T.efl2Window(1); T.efl2Window(2); T.efl1Window(1); T.efl1Window(2); ...
-        T.nMatched; T.matchPct; T.overallPct; T.randomProducts; numel(T.unmatched1); numel(T.unmatched2); ...
-        minOrNaN(T.matchM); maxOrNaN(T.matchM)];
+        T.allMatch(2); T.efl2Window(1); T.efl2Window(2); T.efl1Window(1); T.efl1Window(2)];
 end
 writetable(byTol, outputFile, 'Sheet', 'By Tolerance');
 
@@ -532,26 +428,7 @@ for s = 1:2
     for t = 1:nTol
         fileTable.(sprintf('PassRate_with_%s_tol_%s_pct', sys(3 - s).name, tolTag(magTol(t)))) = sys(s).passRate(:, t);
     end
-    for t = 1:nTol
-        fileTable.(sprintf('Matched_%s_tol_%s', sys(3 - s).name, tolTag(magTol(t)))) = sys(s).partner(:, t);
-    end
     writetable(fileTable, outputFile, 'Sheet', char(sys(s).name + " Files"));
-end
-
-for t = 1:nTol
-    T = tol(t);
-    pi1 = T.matchPairs(:, 1);
-    pi2 = T.matchPairs(:, 2);
-    matchTable = table((1:T.nMatched).', names1(pi1), names2(pi2), E1(pi1), E2(pi2).', T.matchM, T.matchM - magTarget, ...
-        'VariableNames', {'Product', char("File_" + sys(1).name), char("File_" + sys(2).name), ...
-        char("EFL_" + sys(1).name + "_mm"), char("EFL_" + sys(2).name + "_mm"), 'Magnification', 'Deviation'});
-    writetable(matchTable, outputFile, 'Sheet', ['Matched tol ' tolTag(T.tol)]);
-
-    unSystem = [repmat(sys(1).name, numel(T.unmatched1), 1); repmat(sys(2).name, numel(T.unmatched2), 1)];
-    unFile = [names1(T.unmatched1); names2(T.unmatched2)];
-    unEfl = [E1(T.unmatched1); E2(T.unmatched2).'];
-    writetable(table(unSystem, unFile, unEfl, 'VariableNames', {'System', 'FileName', 'EFL_abs_mm'}), ...
-        outputFile, 'Sheet', ['Unmatched tol ' tolTag(T.tol)]);
 end
 
 if writePairsSheet
@@ -670,8 +547,6 @@ for t = 1:nTol
         sprintf('  İzinli |EFL_%s|:    %.4f – %.4f mm  (nominal %s ile)', n1Name, T.efl1Window(1), T.efl1Window(2), n2Name)
         sprintf('  %s dosyaları:      en az bir %s ile %%%.1f, tümüyle %%%.1f', n1Name, n2Name, T.anyMatch(1), T.allMatch(1))
         sprintf('  %s dosyaları:      en az bir %s ile %%%.1f, tümüyle %%%.1f', n2Name, n1Name, T.anyMatch(2), T.allMatch(2))
-        sprintf('  EŞLEŞTİRMELİ MONTAJ: %d / %d ürün (%%%.1f), rastgele montajda %.1f', ...
-            T.nMatched, nMaxProducts, T.matchPct, T.randomProducts)
         ''}]; %#ok<AGROW>
 end
 
@@ -701,11 +576,6 @@ for t = 1:nTol
         'Yield kümesinden rastgele seçilen bir %s ile bir %s birlikte kullanıldığında isteri sağlama ' ...
         'olasılığı yaklaşık %%%.1f''dir.'], T.tol, reqTextOf(T), nPairs, T.nPass, T.passPct, ...
         n1Name, n2Name, T.passPct); %#ok<SAGROW>
-end
-for t = 1:nTol
-    assess{end + 1, 1} = sprintf(['•  ±%g, eşleştirmeli montaj: %d %s ve %d %s en iyi şekilde eşleştirilirse ' ...
-        '%d ürün çıkar (%%%.1f); rastgele montajda beklenen %.1f ürün (ayrıntı: bölüm 4 ve 5).'], tol(t).tol, ...
-        n1, n1Name, n2, n2Name, tol(t).nMatched, tol(t).matchPct, tol(t).randomProducts); %#ok<SAGROW>
 end
 if nTol > 1
     assess{end + 1, 1} = sprintf(['Tolerans ±%g''den ±%g''ye daraltıldığında geçme oranı %%%.2f''den ' ...
@@ -878,72 +748,10 @@ meaning = {
     };
 meaningFig = textPage('3. İSTATİSTİKLERİN ANLAMI', meaning, 'Arial', 10);
 
-% --- Page: matched assembly -----------------------------------------------
-matchText = {
-    'SORU'
-    sprintf(['Elde %d %s ve %d %s var (MTF''e göre %%%g yield kümeleri). EFL''ler ölçülüp her %s''a uygun bir ' ...
-     '%s seçilerek montaj yapılırsa, her sistem en fazla bir kez kullanılmak şartıyla büyütme isterini ' ...
-     'sağlayan en fazla kaç ürün çıkar?'], n1, n1Name, n2, n2Name, yieldPct, n1Name, n2Name)
-    ''
-    'YÖNTEM'
-    ['Bu bir maksimum eşleştirme problemidir. Kriter |M − hedef| ≤ tolerans olduğundan, her ' n1Name ' için ' ...
-     'uygun ' n2Name ' EFL''leri sürekli bir aralık oluşturur ve bu aralık ' n1Name ' EFL''si büyüdükçe kayar. ' ...
-     'Bu yapıda şu algoritma kesin en büyük ürün sayısını verir: ' n1Name '''lar EFL''ye göre küçükten büyüğe ' ...
-     'sıralanır, her birine uygun ve henüz kullanılmamış en küçük EFL''li ' n2Name ' verilir. Aynı ürün ' ...
-     'sayısını veren eşleştirmeler arasından, toplam |M − hedef| en küçük olan seçilir (MATLAB matchpairs).']
-    sprintf(['Karşılaştırma: rastgele montajda (eşleştirme yapılmadan, birebir rastgele dağıtım) beklenen ürün ' ...
-     'sayısı = %d × geçme oranıdır.'], nMaxProducts)
-    ''
-    'SONUÇ'
-    };
-for t = 1:nTol
-    T = tol(t);
-    matchLine = sprintf(['•  ±%g: %d ürün / %d olası çift = %%%.1f eşleştirme verimi. Rastgele montajda %.1f ürün ' ...
-        '(%%%.1f). Eşleşemeyen: %d %s, %d %s. MC dosya sayısına göre toplam verim (MTF yield + eşleştirme): ' ...
-        '%d / %d = %%%.1f.'], T.tol, T.nMatched, nMaxProducts, T.matchPct, T.randomProducts, T.passPct, ...
-        numel(T.unmatched1), n1Name, numel(T.unmatched2), n2Name, T.nMatched, nMcRef, T.overallPct);
-    if T.nMatched > 0
-        matchLine = [matchLine sprintf(' Eşleştirilen çiftlerin büyütmesi %.4f – %.4f.', min(T.matchM), max(T.matchM))]; %#ok<AGROW>
-    end
-    matchText{end + 1, 1} = matchLine; %#ok<SAGROW>
-end
-matchText = [matchText; {
-    ''
-    'NASIL YORUMLANIR'
-    ['•  Eşleştirme verimi ile rastgele montaj arasındaki fark, EFL ölçüp eşleştirmenin kazancıdır. Fark ' ...
-     'büyükse eşleştirmeli montaj üretim için güçlü bir seçenektir.']
-    ['•  Eşleşemeyen sistemler genellikle EFL''si dağılımın uçlarında olanlardır (liste Excel''de "Unmatched" ' ...
-     'sayfalarında). Saçılımı büyük olan sistemin uç dosyaları çoğunlukla açıkta kalır; ortalama kayma ' ...
-     'varsa açıkta kalanlar dağılımın bir tarafında toplanır.']
-    ['•  Hangi dosyanın hangisiyle eşleştiği Excel''de "Matched" sayfalarında ve dosya tablolarının ' ...
-     '"Matched_..." sütunlarındadır.']
-    ''
-    'VARSAYIMLAR'
-    ['•  EFL''ler hatasız ölçülüyor ve tüm parti aynı anda eşleştiriliyor; bu en iyi durumdur. Ölçüm ' ...
-     'belirsizliği kabul bandını daraltır; partiler küçükse (örneğin 10''ar) seçenek azaldığı için verim düşer.']
-    ['•  Sonuç tek bir Monte Carlo örneğine aittir. Az dosyayla ürün sayısı birkaç adet oynayabilir; MC dosya ' ...
-     'sayısı arttıkça sonuç kararlı hale gelir.']
-    }];
-matchFig = textPage('4. EŞLEŞTİRMELİ MONTAJ – KAÇ ÜRÜN ÇIKAR?', matchText, 'Arial', 10);
-
 % --- Figure pages --------------------------------------------------------
-plotFigs = gobjects(5, 1);
+plotFigs = gobjects(4, 1);
 
-plotFigs(5) = figurePage(fig5, '5. EŞLEŞTİRMELİ MONTAJ GRAFİĞİ', {
-    'NASIL OKUNUR'
-    ['•  Üst grafik: her tolerans için gri çubuk rastgele montajda beklenen ürün sayısı, mavi çubuk en iyi ' ...
-     'eşleştirmeyle çıkan ürün sayısıdır. Kesikli çizgi olası en fazla ürün sayısıdır (küçük yield kümesinin ' ...
-     'dosya sayısı).']
-    ['•  Alt grafik: eşleştirilen her çiftin büyütmesi, ' n1Name ' |EFL|''sine göre. Kesikli çizgiler tolerans ' ...
-     'sınırlarıdır; tüm noktalar kendi toleransının sınırları içindedir.']
-    'NASIL YORUMLANIR'
-    ['•  Mavi çubuk kesikli çizgiye ne kadar yakınsa eşleştirme o kadar başarılıdır. Gri ile mavi arasındaki ' ...
-     'fark eşleştirmenin kazancıdır.']
-    ['•  Alt grafikte noktalar bir sınıra yığılıyorsa eşleştirme zorlanıyor demektir; ortalama kayma ' ...
-     'düzeltilirse noktalar hedef çizgisine yaklaşır ve ürün sayısı artar.']
-    }, false);
-
-plotFigs(1) = figurePage(fig1, '6. BÜYÜTME DAĞILIMI', {
+plotFigs(1) = figurePage(fig1, '4. BÜYÜTME DAĞILIMI', {
     'NASIL OKUNUR'
     sprintf(['•  Her çubuk, büyütmesi o aralıkta olan %s – %s çifti sayısıdır. Renkli bantlar tolerans ' ...
      'isterleridir (%s); iç içe bantlarda en koyu ve dar olan en sıkı toleranstır. Bir bandın içindeki ' ...
@@ -959,7 +767,7 @@ plotFigs(1) = figurePage(fig1, '6. BÜYÜTME DAĞILIMI', {
      '(öncelik varyans katkısı büyük olan sistemde) veya seçici montaj yapılmalıdır.']
     }, false);
 
-plotFigs(2) = figurePage(fig2, '7. EFL ÇİFT HARİTASI', {
+plotFigs(2) = figurePage(fig2, '5. EFL ÇİFT HARİTASI', {
     'NASIL OKUNUR'
     sprintf(['•  Her nokta bir çifttir: yatay eksen %s |EFL|, dikey eksen %s |EFL|. Nokta rengi, çiftin ' ...
      'sağladığı en sıkı toleranstır (koyu yeşil = en dar bantta geçti, açık renk = yalnızca daha geniş ' ...
@@ -973,7 +781,7 @@ plotFigs(2) = figurePage(fig2, '7. EFL ÇİFT HARİTASI', {
      'bölgeden taşıyorsa, EFL ölçülüp sistemler bu harita üzerinden eşleştirilebilir (seçici montaj).']
     }, true);
 
-plotFigs(3) = figurePage(fig3, '8. DOSYA BAZINDA GEÇME ORANI', {
+plotFigs(3) = figurePage(fig3, '6. DOSYA BAZINDA GEÇME ORANI', {
     'NASIL OKUNUR'
     ['•  Her nokta bir dosyadır; her tolerans ayrı renk ve işaretle gösterilir. Yatay eksen dosyanın ' ...
      '|EFL|''si, dikey eksen diğer sistemin yield kümesindeki dosyaların yüzde kaçıyla isteri sağladığıdır. ' ...
@@ -989,7 +797,7 @@ plotFigs(3) = figurePage(fig3, '8. DOSYA BAZINDA GEÇME ORANI', {
      'sistemin karşısındaki dosyalar bu testi geçemez.']
     }, false);
 
-plotFigs(4) = figurePage(fig4, '9. EFL DAĞILIMLARI', {
+plotFigs(4) = figurePage(fig4, '7. EFL DAĞILIMLARI', {
     'NASIL OKUNUR'
     sprintf(['•  Gri: tüm geçerli MC dosyalarının |EFL| dağılımı. Mavi: MTF''e göre %%%g yield kümesi ' ...
      '(çaprazlamada kullanılan dosyalar). Noktalı çizgi nominal |EFL|''dir. Bu grafik toleranstan bağımsızdır.'], yieldPct)
@@ -1003,7 +811,7 @@ plotFigs(4) = figurePage(fig4, '9. EFL DAĞILIMLARI', {
     }, false);
 
 % --- Assemble pages: frame, header and page numbers ----------------------
-allFigs = [summaryFig; assessFig; methodFig; meaningFig; matchFig; plotFigs(5); plotFigs(1:4)];
+allFigs = [summaryFig; assessFig; methodFig; meaningFig; plotFigs];
 nPages = numel(allFigs);
 headerText = sprintf('Büyütme Tolerans Analizi  |  %s: %s  |  %s: %s', ...
     n1Name, sys(1).nominalName, n2Name, sys(2).nominalName);
@@ -1041,8 +849,6 @@ if fid > 0
     fprintf(fid, '%s\r\n', summaryLines{:});
     fprintf(fid, '\r\n%s\r\n\r\n', 'SONUÇ VE DEĞERLENDİRME');
     fprintf(fid, '%s\r\n', assess{:});
-    fprintf(fid, '\r\n%s\r\n\r\n', 'EŞLEŞTİRMELİ MONTAJ');
-    fprintf(fid, '%s\r\n', matchText{:});
     fclose(fid);
 end
 
@@ -1198,52 +1004,6 @@ T.passRate1 = 100 * mean(T.pass, 2);       % n1 x 1
 T.passRate2 = 100 * mean(T.pass, 1).';     % n2 x 1
 T.anyMatch = [100 * mean(T.passRate1 > 0), 100 * mean(T.passRate2 > 0)];
 T.allMatch = [100 * mean(T.passRate1 == 100), 100 * mean(T.passRate2 == 100)];
-end
-
-function [pairs, method] = bestMatching(M, pass, E1, E2, magTarget)
-% Largest set of disjoint (system 1, system 2) pairs that meet the requirement.
-% pass(i, j): pair i-j meets |M - target| <= tol. For each system 1 file the
-% acceptable system 2 EFLs form one interval that moves up with EFL_1, so the
-% greedy rule below is exact: take system 1 files in increasing EFL and give
-% each the unused acceptable system 2 file with the smallest EFL.
-[~, rowOrder] = sort(E1(:));
-[~, colOrder] = sort(E2(:));
-used = false(1, numel(E2));
-pairs = zeros(0, 2);
-for i = rowOrder.'
-    cand = colOrder(pass(i, colOrder) & ~used(colOrder));
-    if ~isempty(cand)
-        used(cand(1)) = true;
-        pairs(end + 1, :) = [i, cand(1)]; %#ok<AGROW>
-    end
-end
-method = "greedy (maximum count)";
-
-% Among the maximum matchings, take the one with the smallest total |M - target|
-% (matchpairs, R2019a+). Unmatched cost 1 per file >> any |M - target|, so the
-% number of pairs is maximised first; disallowed pairs get a prohibitive cost.
-try
-    cost = abs(M - magTarget);
-    cost(~pass) = 1e6;
-    mp = matchpairs(cost, 1);
-    if size(mp, 1) == size(pairs, 1) && all(pass(sub2ind(size(M), mp(:, 1), mp(:, 2))))
-        pairs = mp;
-        method = "matchpairs (maximum count, minimum total |M - target|)";
-    end
-catch
-end
-
-% Sort the products by EFL of system 1
-[~, order] = sort(E1(pairs(:, 1)));
-pairs = pairs(order, :);
-end
-
-function v = minOrNaN(x)
-if isempty(x), v = NaN; else, v = min(x); end
-end
-
-function v = maxOrNaN(x)
-if isempty(x), v = NaN; else, v = max(x); end
 end
 
 function q = quantileSorted(x, p)
