@@ -6,7 +6,8 @@
 %   kümesine giren dosyalar seçilir; 1. sistemin yield kümesindeki HER EFL,
 %   2. sistemin yield kümesindeki HER EFL ile eşleştirilir (tam çaprazlama,
 %   n1 x n2 çift). Her çiftin büyütmesi hesaplanır ve büyütme isterine
-%   (magTarget ± magTol) göre istatistik verilir.
+%   (magTarget ± magTol) göre istatistik verilir. magTol birden fazla değer
+%   olabilir (örn. [0.01 0.03]); her tolerans için sonuçlar ayrı verilir.
 %   Başka bir scriptin çıktısı kullanılmaz; EFL ve MTF bu scriptte
 %   OpticStudio ile hesaplanır.
 %
@@ -39,7 +40,7 @@
 %     k   = bir dedektör pikselinin OLED'de kapladığı piksel sayısı
 %           (512 piksellik görüntü 1024 piksele basılıyor -> k = 2).
 %     Nominal: M = 1 için |EFL_2| = 0.7533 × |EFL_1|.
-%   Geçme koşulu: |M - magTarget| <= magTol.
+%   Geçme koşulu: |M - magTarget| <= magTol, magTol'daki her değer için ayrı.
 %   İstatistikler:
 %     - Geçen çift oranı (rastgele eşleşen iki sistemin geçme olasılığı)
 %     - M'nin ortalama, std, medyan, min, max ve yüzdelikleri
@@ -62,7 +63,8 @@
 %   EFL_Pair_Map.png            : EFL_1 - EFL_2 düzleminde geçen / kalan çiftler
 %   PassRate_by_File.png        : her dosyanın diğer sistemle geçme oranı
 %   EFL_Distributions.png       : her sistemin EFL dağılımı (tümü ve yield kümesi)
-%   Magnification_Results.xlsx  : "Summary", "Percentiles", sistem başına dosya
+%   Magnification_Results.xlsx  : "Summary", "By Tolerance" (her tolerans bir
+%                                 sütun), "Percentiles", sistem başına dosya
 %                                 tabloları, "Pairs" (tüm çiftler), "Settings"
 %   Magnification_Data.mat      : tüm ham veriler
 %   *.fig                       : grafiklerin düzenlenebilir MATLAB dosyaları
@@ -94,14 +96,17 @@ yieldPct        = 90;                % yield level (%): best yieldPct % of each 
 mtfFreqFrac     = 0.5;               % MTF criterion frequency as a fraction of each system's Nyquist
 mtfFields       = {[], []};          % fields used for the MTF criterion per system; [] = all fields
 magTarget       = 1.00;              % required magnification
-magTol          = 0.03;              % allowed deviation: |M - magTarget| <= magTol
+magTol          = [0.01 0.03];       % allowed deviation(s): |M - magTarget| <= magTol; one or more values
 writePairsSheet = true;              % write every pair to the "Pairs" sheet (Excel limit 1048575 rows)
 nHistBins       = 60;                % histogram bins of the magnification
 % FFT MTF sample size is set in computeFileMtf (S_64x64 by default)
 
 magConst = pixelScale * pixelPitch_um(2) / pixelPitch_um(1);   % M = magConst * |EFL_1| / |EFL_2|
-magLow   = magTarget - magTol;
-magHigh  = magTarget + magTol;
+magTol   = unique(abs(magTol(:)).');      % tightest tolerance first
+nTol     = numel(magTol);
+if nTol == 0 || any(magTol == 0)
+    error('magTol must contain one or more positive values.');
+end
 
 %% Select the two Monte Carlo folders
 sys = struct([]);
@@ -176,77 +181,66 @@ n1 = numel(E1);
 n2 = numel(E2);
 
 M = magConst * E1 ./ E2;                    % n1 x n2 magnification matrix
-pass = abs(M - magTarget) <= magTol + 1e-12;
-
 mAll   = M(:);
 nPairs = numel(mAll);
-nPass  = sum(pass(:));
-passPct = 100 * nPass / nPairs;
 
-%% Statistics of the magnification
+%% Statistics of the magnification (independent of the tolerance)
 mMean = mean(mAll);
 mStd  = std(mAll);
 mMed  = median(mAll);
 mMin  = min(mAll);
 mMax  = max(mAll);
-belowPct = 100 * mean(mAll < magLow - 1e-12);
-abovePct = 100 * mean(mAll > magHigh + 1e-12);
 
 pctLevels = [0.135 1 2.5 5 25 50 75 95 97.5 99 99.865]';
 pctValues = quantileSorted(sort(mAll), pctLevels / 100);
 
-Cp  = (magHigh - magLow) / (6 * mStd);
-Cpk = min(magHigh - mMean, mMean - magLow) / (3 * mStd);
-normPhi = @(x) 0.5 * erfc(-x / sqrt(2));
-normPassPct = 100 * (normPhi((magHigh - mMean) / mStd) - normPhi((magLow - mMean) / mStd));
-
-% If the mean magnification were moved to the target (nominal EFL correction)
-mCentered = mAll * (magTarget / mMean);
-centeredPassPct = 100 * mean(abs(mCentered - magTarget) <= magTol + 1e-12);
-
-% Nominal magnification and EFL windows
 mNominal = magConst * sys(1).nominalEFL / sys(2).nominalEFL;
-efl2Window = magConst * sys(1).nominalEFL ./ [magHigh, magLow];   % allowed |EFL_2| for nominal |EFL_1|
-efl1Window = sys(2).nominalEFL / magConst * [magLow, magHigh];    % allowed |EFL_1| for nominal |EFL_2|
 
 % Contribution of each system to the magnification error: var(ln M) = var(ln E1) + var(ln E2)
 varLn = [var(log(E1)), var(log(E2))];
 contribPct = 100 * varLn / sum(varLn);
 
-% Pass rate of each file against all files of the other system
-passRate1 = 100 * mean(pass, 2);           % n1 x 1
-passRate2 = 100 * mean(pass, 1).';         % n2 x 1
+%% Statistics for each tolerance
+for t = nTol:-1:1
+    tol(t) = tolStats(M, magTarget, magTol(t), mMean, mStd, magConst, ...
+        sys(1).nominalEFL, sys(2).nominalEFL); %#ok<SAGROW>
+end
 
-sys(1).passRate = nan(numel(sys(1).fileNames), 1);
-sys(1).passRate(sys(1).inYield) = passRate1;
-sys(2).passRate = nan(numel(sys(2).fileNames), 1);
-sys(2).passRate(sys(2).inYield) = passRate2;
-
-anyMatch = [100 * mean(passRate1 > 0), 100 * mean(passRate2 > 0)];
-allMatch = [100 * mean(passRate1 == 100), 100 * mean(passRate2 == 100)];
+% Pass rate of each file against all files of the other system (one column per tolerance)
+for s = 1:2
+    sys(s).passRate = nan(numel(sys(s).fileNames), nTol);
+end
+for t = 1:nTol
+    sys(1).passRate(sys(1).inYield, t) = tol(t).passRate1;
+    sys(2).passRate(sys(2).inYield, t) = tol(t).passRate2;
+end
 
 %% Command window summary
 fprintf('\n===== MAGNIFICATION ANALYSIS =====\n');
 fprintf('M = (|EFL_%s| / |EFL_%s|) x (%g x %g um / %g um) = %.6f x |EFL_1| / |EFL_2|\n', ...
     sys(1).name, sys(2).name, pixelScale, pixelPitch_um(2), pixelPitch_um(1), magConst);
-fprintf('Requirement: M = %.4f +/- %.4f  [%.4f, %.4f]\n', magTarget, magTol, magLow, magHigh);
 fprintf('Nominal: |EFL_1| = %.4f mm, |EFL_2| = %.4f mm, M = %.5f\n', ...
     sys(1).nominalEFL, sys(2).nominalEFL, mNominal);
 fprintf('Pairs: %d x %d = %d\n', n1, n2, nPairs);
-fprintf('\nPASS: %d of %d pairs = %.2f %%\n', nPass, nPairs, passPct);
-fprintf('Below %.4f: %.2f %%   Above %.4f: %.2f %%\n', magLow, belowPct, magHigh, abovePct);
-fprintf('\nM mean %.5f  std %.5f  median %.5f  min %.5f  max %.5f\n', mMean, mStd, mMed, mMin, mMax);
-fprintf('Cp %.3f  Cpk %.3f  normal-fit pass %.2f %%\n', Cp, Cpk, normPassPct);
-fprintf('Pass rate if mean M were centered at %.4f: %.2f %%\n', magTarget, centeredPassPct);
-fprintf('\nContribution to magnification variance: %s %.1f %%, %s %.1f %%\n', ...
+fprintf('M mean %.5f  std %.5f  median %.5f  min %.5f  max %.5f\n', mMean, mStd, mMed, mMin, mMax);
+fprintf('Contribution to magnification variance: %s %.1f %%, %s %.1f %%\n', ...
     sys(1).name, contribPct(1), sys(2).name, contribPct(2));
-fprintf('Allowed |EFL_%s| for nominal |EFL_%s|: %.4f - %.4f mm\n', ...
-    sys(2).name, sys(1).name, efl2Window(1), efl2Window(2));
-fprintf('Allowed |EFL_%s| for nominal |EFL_%s|: %.4f - %.4f mm\n', ...
-    sys(1).name, sys(2).name, efl1Window(1), efl1Window(2));
-for s = 1:2
-    fprintf('%s files matching at least one / all files of the other system: %.1f %% / %.1f %%\n', ...
-        sys(s).name, anyMatch(s), allMatch(s));
+
+for t = 1:nTol
+    T = tol(t);
+    fprintf('\n--- Requirement M = %.4f +/- %.4f  [%.4f, %.4f] ---\n', magTarget, T.tol, T.low, T.high);
+    fprintf('PASS: %d of %d pairs = %.2f %%   (below %.2f %%, above %.2f %%)\n', ...
+        T.nPass, nPairs, T.passPct, T.belowPct, T.abovePct);
+    fprintf('Cp %.3f  Cpk %.3f  normal-fit pass %.2f %%  centered-mean pass %.2f %%\n', ...
+        T.Cp, T.Cpk, T.normPassPct, T.centeredPassPct);
+    fprintf('Allowed |EFL_%s| for nominal |EFL_%s|: %.4f - %.4f mm\n', ...
+        sys(2).name, sys(1).name, T.efl2Window(1), T.efl2Window(2));
+    fprintf('Allowed |EFL_%s| for nominal |EFL_%s|: %.4f - %.4f mm\n', ...
+        sys(1).name, sys(2).name, T.efl1Window(1), T.efl1Window(2));
+    for s = 1:2
+        fprintf('%s files matching at least one / all files of the other system: %.1f %% / %.1f %%\n', ...
+            sys(s).name, T.anyMatch(s), T.allMatch(s));
+    end
 end
 
 %% Output folder: "BÜYÜTME ANALİZİ - %90 YIELD" in the system 1 folder
@@ -257,69 +251,106 @@ if ~isfolder(outFolder)
     mkdir(outFolder);
 end
 
-colPass = [0.47 0.67 0.19];
 colFail = [0.85 0.33 0.10];
 colBlue = [0 0.45 0.74];
+% One color per tolerance, tightest first
+tolPalette = [0.10 0.50 0.10; 0.55 0.75 0.20; 0.93 0.69 0.13; 0.49 0.18 0.56; 0.30 0.75 0.93];
+tolColors = tolPalette(mod(0:nTol - 1, size(tolPalette, 1)) + 1, :);
+tolMarkers = {'o', 's', '^', 'd', 'v'};
 eflLabel = @(s) sprintf('|EFL| %s (mm)', sys(s).name);
+passTitle = strjoin(arrayfun(@(T) sprintf('\\pm%g: %.2f%%', T.tol, T.passPct), tol, 'UniformOutput', false), ',  ');
 
-%% Figure 1: magnification histogram with tolerance band
+%% Figure 1: magnification histogram with the tolerance bands
 fig1 = figure('Name', 'Magnification Distribution', 'Color', 'w', 'Position', [100 100 950 540]);
 h = histogram(mAll, nHistBins, 'FaceColor', colBlue, 'DisplayName', sprintf('All pairs (%d)', nPairs));
 hold on;
 yl = ylim;
-band = patch([magLow magHigh magHigh magLow], [0 0 yl(2) yl(2)], colPass, ...
-    'FaceAlpha', 0.18, 'EdgeColor', 'none', 'DisplayName', sprintf('Requirement %.2f \\pm %.2f', magTarget, magTol));
-uistack(band, 'bottom');
-xline(magTarget, '-', 'Color', colPass, 'LineWidth', 1.5, 'HandleVisibility', 'off');
-xline(magLow, '--', 'Color', colPass, 'LineWidth', 1.2, 'HandleVisibility', 'off');
-xline(magHigh, '--', 'Color', colPass, 'LineWidth', 1.2, 'HandleVisibility', 'off');
+bands = gobjects(nTol, 1);
+for t = nTol:-1:1   % widest band first, so the tighter bands are drawn on top of it
+    bands(t) = patch([tol(t).low tol(t).high tol(t).high tol(t).low], [0 0 yl(2) yl(2)], tolColors(t, :), ...
+        'FaceAlpha', 0.18, 'EdgeColor', 'none', ...
+        'DisplayName', sprintf('%.2f \\pm %g  (PASS %.2f%%)', magTarget, tol(t).tol, tol(t).passPct));
+    xline(tol(t).low, '--', 'Color', tolColors(t, :), 'LineWidth', 1.2, 'HandleVisibility', 'off');
+    xline(tol(t).high, '--', 'Color', tolColors(t, :), 'LineWidth', 1.2, 'HandleVisibility', 'off');
+end
+uistack(bands, 'bottom');
+xline(magTarget, '-', 'Color', tolColors(1, :), 'LineWidth', 1.5, 'HandleVisibility', 'off');
 hNom = xline(mNominal, ':', 'Color', 'k', 'LineWidth', 1.5, 'DisplayName', sprintf('Nominal M = %.4f', mNominal));
 hMean = xline(mMean, '-.', 'Color', colFail, 'LineWidth', 1.5, 'DisplayName', sprintf('Mean M = %.4f', mMean));
 hold off;
-xlim([min(mMin, magLow) max(mMax, magHigh)] + [-1 1] * 0.05 * (max(mMax, magHigh) - min(mMin, magLow)));
+xMin = min(mMin, tol(end).low);
+xMax = max(mMax, tol(end).high);
+xlim([xMin xMax] + [-1 1] * 0.05 * (xMax - xMin));
 xlabel('Magnification M');
 ylabel('Number of pairs');
-title(sprintf('Magnification of %s x %s pairs (%g%% MTF yield sets): PASS %.2f%%', ...
-    sys(1).name, sys(2).name, yieldPct, passPct));
-legend([h band hNom hMean], 'Location', 'best');
+title(sprintf('Magnification of %s x %s pairs (%g%% MTF yield sets)  |  PASS %s', ...
+    sys(1).name, sys(2).name, yieldPct, passTitle));
+legend([h; bands; hNom; hMean], 'Location', 'best');
 grid on;
 saveFigure(fig1, fullfile(outFolder, 'Magnification_Histogram.png'));
 
-%% Figure 2: EFL pair map (pass / fail) with the requirement band
+%% Figure 2: EFL pair map, colored by the tightest tolerance each pair meets
 fig2 = figure('Name', 'EFL Pair Map', 'Color', 'w', 'Position', [120 120 900 700]);
 [G1, G2] = ndgrid(E1, E2);
-plot(G1(~pass), G2(~pass), '.', 'Color', colFail, 'MarkerSize', 5, 'DisplayName', 'Fail');
+passLevel = zeros(size(M));                 % 0 = fails every tolerance
+for t = nTol:-1:1
+    passLevel(tol(t).pass) = t;             % tightest passed tolerance wins
+end
+plot(G1(passLevel == 0), G2(passLevel == 0), '.', 'Color', colFail, 'MarkerSize', 6, ...
+    'DisplayName', sprintf('Fail (outside \\pm%g)', tol(end).tol));
 hold on;
-plot(G1(pass), G2(pass), '.', 'Color', colPass, 'MarkerSize', 5, 'DisplayName', 'Pass');
+for t = 1:nTol
+    if t == 1
+        label = sprintf('Pass \\pm%g', tol(t).tol);
+    else
+        label = sprintf('Pass \\pm%g only', tol(t).tol);
+    end
+    plot(G1(passLevel == t), G2(passLevel == t), '.', 'Color', tolColors(t, :), 'MarkerSize', 6, ...
+        'DisplayName', label);
+end
 e1Line = linspace(min(E1), max(E1), 50);
 plot(e1Line, magConst * e1Line / magTarget, '-k', 'LineWidth', 1.2, 'DisplayName', sprintf('M = %.2f', magTarget));
-plot(e1Line, magConst * e1Line / magLow, '--k', 'LineWidth', 1, 'DisplayName', sprintf('M = %.2f', magLow));
-plot(e1Line, magConst * e1Line / magHigh, '--k', 'LineWidth', 1, 'DisplayName', sprintf('M = %.2f', magHigh));
+for t = 1:nTol
+    plot(e1Line, magConst * e1Line / tol(t).low, '--', 'Color', tolColors(t, :), 'LineWidth', 1.2, ...
+        'DisplayName', sprintf('M = %.2f \\pm %g', magTarget, tol(t).tol));
+    plot(e1Line, magConst * e1Line / tol(t).high, '--', 'Color', tolColors(t, :), 'LineWidth', 1.2, ...
+        'HandleVisibility', 'off');
+end
 plot(sys(1).nominalEFL, sys(2).nominalEFL, 'kp', 'MarkerSize', 14, 'MarkerFaceColor', 'y', 'DisplayName', 'Nominal');
 hold off;
 xlabel(eflLabel(1));
 ylabel(eflLabel(2));
-title(sprintf('EFL pairs: %d of %d pass (%.2f%%)', nPass, nPairs, passPct));
+title(sprintf('EFL pairs (%d)  |  PASS %s', nPairs, passTitle));
 legend('Location', 'best');
 grid on;
 saveFigure(fig2, fullfile(outFolder, 'EFL_Pair_Map.png'));
 
-%% Figure 3: pass rate of each file against the other system
+%% Figure 3: pass rate of each file against the other system, one series per tolerance
 fig3 = figure('Name', 'Pass Rate by File', 'Color', 'w', 'Position', [140 140 950 700]);
-passRates = {passRate1, passRate2};
 eflSets = {E1, E2(:)};
 for s = 1:2
     subplot(2, 1, s);
-    plot(eflSets{s}, passRates{s}, 'o', 'Color', colBlue, 'MarkerFaceColor', colBlue, 'MarkerSize', 4);
     hold on;
-    xline(sys(s).nominalEFL, ':k', 'Nominal', 'LineWidth', 1.2);
+    for t = 1:nTol
+        if s == 1
+            rates = tol(t).passRate1;
+        else
+            rates = tol(t).passRate2;
+        end
+        plot(eflSets{s}, rates, tolMarkers{mod(t - 1, numel(tolMarkers)) + 1}, 'Color', tolColors(t, :), ...
+            'MarkerFaceColor', tolColors(t, :), 'MarkerSize', 5, ...
+            'DisplayName', sprintf('\\pm%g: %.0f%% match \\geq1, %.0f%% match all', ...
+            tol(t).tol, tol(t).anyMatch(s), tol(t).allMatch(s)));
+    end
+    xline(sys(s).nominalEFL, ':k', 'Nominal', 'LineWidth', 1.2, 'HandleVisibility', 'off');
     hold off;
     ylim([-5 105]);
     xlabel(eflLabel(s));
     ylabel(sprintf('Pass rate with %s files (%%)', sys(3 - s).name));
-    title(sprintf('%s files: %.1f%% match at least one, %.1f%% match all %s files', ...
-        sys(s).name, anyMatch(s), allMatch(s), sys(3 - s).name));
+    title(sprintf('%s files: pass rate against the %s yield set', sys(s).name, sys(3 - s).name));
+    legend('Location', 'best');
     grid on;
+    box on;
 end
 saveFigure(fig3, fullfile(outFolder, 'PassRate_by_File.png'));
 
@@ -352,48 +383,63 @@ if isfile(outputFile)
     delete(outputFile);
 end
 
+tolTag = @(x) strrep(sprintf('%g', x), '.', 'p');   % 0.01 -> "0p01" for Excel column names
+
+% Summary: values that do not depend on the tolerance
 summaryNames = [ ...
-    "Pairs (n1 x n2)"; "Passing pairs"; "Pass rate"; "Below lower limit"; "Above upper limit"; ...
-    "Mean M"; "Std M"; "Median M"; "Min M"; "Max M"; "Nominal M"; ...
-    "Cp"; "Cpk"; "Normal-fit pass rate"; "Pass rate if mean M centered at target"; ...
+    "Pairs (n1 x n2)"; "Mean M"; "Std M"; "Median M"; "Min M"; "Max M"; "Nominal M"; ...
     "Variance contribution " + sys(1).name; "Variance contribution " + sys(2).name; ...
+    "Nominal |EFL| " + sys(1).name; "Nominal |EFL| " + sys(2).name];
+summaryValues = [nPairs; mMean; mStd; mMed; mMin; mMax; mNominal; contribPct(1); contribPct(2); ...
+    sys(1).nominalEFL; sys(2).nominalEFL];
+summaryUnits = ["count"; ""; ""; ""; ""; ""; ""; "%"; "%"; "mm"; "mm"];
+writetable(table(summaryNames, summaryValues, summaryUnits, ...
+    'VariableNames', {'Parameter', 'Value', 'Unit'}), outputFile, 'Sheet', 'Summary');
+
+% By Tolerance: one column per tolerance
+byTolNames = [ ...
+    "Tolerance (+/-)"; "Lower limit"; "Upper limit"; "Passing pairs"; "Pass rate"; ...
+    "Below lower limit"; "Above upper limit"; "Cp"; "Cpk"; "Normal-fit pass rate"; ...
+    "Pass rate if mean M centered at target"; ...
     sys(1).name + " files matching >= 1 " + sys(2).name + " file"; ...
     sys(1).name + " files matching all " + sys(2).name + " files"; ...
     sys(2).name + " files matching >= 1 " + sys(1).name + " file"; ...
     sys(2).name + " files matching all " + sys(1).name + " files"; ...
-    "Nominal |EFL| " + sys(1).name; "Nominal |EFL| " + sys(2).name; ...
     "Allowed |EFL| " + sys(2).name + " min (nominal " + sys(1).name + ")"; ...
     "Allowed |EFL| " + sys(2).name + " max (nominal " + sys(1).name + ")"; ...
     "Allowed |EFL| " + sys(1).name + " min (nominal " + sys(2).name + ")"; ...
     "Allowed |EFL| " + sys(1).name + " max (nominal " + sys(2).name + ")"];
-summaryValues = [nPairs; nPass; passPct; belowPct; abovePct; ...
-    mMean; mStd; mMed; mMin; mMax; mNominal; ...
-    Cp; Cpk; normPassPct; centeredPassPct; contribPct(1); contribPct(2); ...
-    anyMatch(1); allMatch(1); anyMatch(2); allMatch(2); ...
-    sys(1).nominalEFL; sys(2).nominalEFL; efl2Window(1); efl2Window(2); efl1Window(1); efl1Window(2)];
-summaryUnits = ["count"; "count"; "%"; "%"; "%"; ""; ""; ""; ""; ""; ""; ""; ""; "%"; "%"; "%"; "%"; ...
-    "%"; "%"; "%"; "%"; "mm"; "mm"; "mm"; "mm"; "mm"; "mm"];
-writetable(table(summaryNames, summaryValues, summaryUnits, ...
-    'VariableNames', {'Parameter', 'Value', 'Unit'}), outputFile, 'Sheet', 'Summary');
+byTolUnits = [""; ""; ""; "count"; "%"; "%"; "%"; ""; ""; "%"; "%"; "%"; "%"; "%"; "%"; "mm"; "mm"; "mm"; "mm"];
+byTol = table(byTolNames, byTolUnits, 'VariableNames', {'Parameter', 'Unit'});
+for t = 1:nTol
+    T = tol(t);
+    byTol.(['Tol_' tolTag(T.tol)]) = [T.tol; T.low; T.high; T.nPass; T.passPct; T.belowPct; T.abovePct; ...
+        T.Cp; T.Cpk; T.normPassPct; T.centeredPassPct; T.anyMatch(1); T.allMatch(1); T.anyMatch(2); ...
+        T.allMatch(2); T.efl2Window(1); T.efl2Window(2); T.efl1Window(1); T.efl1Window(2)];
+end
+writetable(byTol, outputFile, 'Sheet', 'By Tolerance');
 
 writetable(table(pctLevels, pctValues, 'VariableNames', {'Percentile', 'Magnification'}), ...
     outputFile, 'Sheet', 'Percentiles');
 
 for s = 1:2
-    fileTable = table(sys(s).fileNames, sys(s).EFL, sys(s).mtfMetric, sys(s).mtfRank, ...
-        sys(s).inYield, sys(s).passRate, ...
-        'VariableNames', {'FileName', 'EFL_abs_mm', 'MTF_criterion', 'MTF_rank', 'InYieldSet', ...
-        char("PassRate_with_" + sys(3 - s).name + "_pct")});
+    fileTable = table(sys(s).fileNames, sys(s).EFL, sys(s).mtfMetric, sys(s).mtfRank, sys(s).inYield, ...
+        'VariableNames', {'FileName', 'EFL_abs_mm', 'MTF_criterion', 'MTF_rank', 'InYieldSet'});
+    for t = 1:nTol
+        fileTable.(sprintf('PassRate_with_%s_tol_%s_pct', sys(3 - s).name, tolTag(magTol(t)))) = sys(s).passRate(:, t);
+    end
     writetable(fileTable, outputFile, 'Sheet', char(sys(s).name + " Files"));
 end
 
 if writePairsSheet
     if nPairs <= 1048575
         [I, J] = ndgrid(1:n1, 1:n2);
-        pairTable = table(names1(I(:)), names2(J(:)), E1(I(:)), E2(J(:)).', mAll, pass(:), ...
+        pairTable = table(names1(I(:)), names2(J(:)), E1(I(:)), E2(J(:)).', mAll, ...
             'VariableNames', {char("File_" + sys(1).name), char("File_" + sys(2).name), ...
-            char("EFL_" + sys(1).name + "_mm"), char("EFL_" + sys(2).name + "_mm"), ...
-            'Magnification', 'Pass'});
+            char("EFL_" + sys(1).name + "_mm"), char("EFL_" + sys(2).name + "_mm"), 'Magnification'});
+        for t = 1:nTol
+            pairTable.(['Pass_tol_' tolTag(magTol(t))]) = tol(t).pass(:);
+        end
         writetable(pairTable, outputFile, 'Sheet', 'Pairs');
     else
         warning('%d pairs exceed the Excel row limit; the "Pairs" sheet is not written (see the .mat file).', nPairs);
@@ -409,7 +455,7 @@ settingNames = [ ...
     "System 2 MTF threshold"; "System 2 MTF fields"; "System 2 valid / yield files"; ...
     "File prefix"; "Yield level (%)"; "MTF frequency (fraction of Nyquist)"; ...
     "Pixel scale k (OLED px per detector px)"; "Magnification constant k*p2/p1"; ...
-    "Magnification formula"; "Target magnification"; "Tolerance (+/-)"];
+    "Magnification formula"; "Target magnification"; "Tolerances (+/-)"];
 settingValues = strings(numel(settingNames), 1);
 for s = 1:2
     o = (s - 1) * 10;
@@ -420,12 +466,12 @@ for s = 1:2
 end
 settingValues(21:end) = [string(filePrefix); string(yieldPct); string(mtfFreqFrac); ...
     string(pixelScale); string(magConst); "M = k*p2/p1 * |EFL_1| / |EFL_2|"; ...
-    string(magTarget); string(magTol)];
+    string(magTarget); strjoin(string(magTol), ", ")];
 writetable(table(settingNames, settingValues, 'VariableNames', {'Parameter', 'Value'}), ...
     outputFile, 'Sheet', 'Settings');
 
 %% Save raw data
-save(fullfile(outFolder, 'Magnification_Data.mat'), 'sys', 'E1', 'E2', 'names1', 'names2', 'M', 'pass', ...
+save(fullfile(outFolder, 'Magnification_Data.mat'), 'sys', 'E1', 'E2', 'names1', 'names2', 'M', 'tol', ...
     'magConst', 'magTarget', 'magTol', 'yieldPct', 'mtfFreqFrac', 'pixelPitch_um', 'nPixels', 'pixelScale');
 
 %% PDF report (A4): summary, assessment, method, interpretation, one page per figure
@@ -449,7 +495,9 @@ end
 
 n1Name = char(sys(1).name);
 n2Name = char(sys(2).name);
-reqText = sprintf('%.4f ± %.4f  (%.4f – %.4f)', magTarget, magTol, magLow, magHigh);
+reqTextOf = @(T) sprintf('%.4f ± %g  (%.4f – %.4f)', magTarget, T.tol, T.low, T.high);
+tolListText = strjoin(arrayfun(@(x) sprintf('±%g', x), magTol, 'UniformOutput', false), ' ve ');
+reqText = sprintf('%.4f, tolerans %s', magTarget, tolListText);
 afocalWord = ["Hayır", "Evet"];
 
 % --- Page: summary -------------------------------------------------------
@@ -478,29 +526,29 @@ for s = 1:2
         ''}]; %#ok<AGROW>
 end
 summaryLines = [summaryLines; {
-    'SONUÇLAR'
+    'SONUÇLAR (toleranstan bağımsız)'
     sprintf('  Çift sayısı:         %d × %d = %d', n1, n2, nPairs)
-    sprintf('  Geçen çift:          %d   -> GEÇME ORANI %%%.2f', nPass, passPct)
-    sprintf('  Alt sınır altında:   %%%.2f      Üst sınır üstünde: %%%.2f', belowPct, abovePct)
     sprintf('  Nominal M:           %.5f', mNominal)
     sprintf('  Ortalama M:          %.5f      Std M: %.5f', mMean, mStd)
     sprintf('  Medyan M:            %.5f      Min / Max: %.5f / %.5f', mMed, mMin, mMax)
     sprintf('  %%1 – %%99 aralığı:    %.5f – %.5f', pctValues(pctLevels == 1), pctValues(pctLevels == 99))
-    sprintf('  Cp / Cpk:            %.3f / %.3f', Cp, Cpk)
-    sprintf('  Normal dağ. tahmini: %%%.2f geçme', normPassPct)
-    sprintf('  Ortalama merkezde:   %%%.2f geçme', centeredPassPct)
     sprintf('  Varyans katkısı:     %s %%%.1f, %s %%%.1f', n1Name, contribPct(1), n2Name, contribPct(2))
-    sprintf('  İzinli |EFL_%s|:    %.4f – %.4f mm  (nominal %s ile)', n2Name, efl2Window(1), efl2Window(2), n1Name)
-    sprintf('  İzinli |EFL_%s|:    %.4f – %.4f mm  (nominal %s ile)', n1Name, efl1Window(1), efl1Window(2), n2Name)
-    sprintf('  %s dosyaları:      en az bir %s ile %%%.1f, tümüyle %%%.1f uyumlu', n1Name, n2Name, anyMatch(1), allMatch(1))
-    sprintf('  %s dosyaları:      en az bir %s ile %%%.1f, tümüyle %%%.1f uyumlu', n2Name, n1Name, anyMatch(2), allMatch(2))
     ''
-    'RAPORUN İÇERİĞİ'
-    '  Sayfa 2   : Sonuç ve değerlendirme'
-    '  Sayfa 3   : Analiz yöntemi'
-    '  Sayfa 4   : İstatistiklerin anlamı'
-    '  Sayfa 5-8 : Grafikler ve nasıl okunacakları'
     }];
+for t = 1:nTol
+    T = tol(t);
+    summaryLines = [summaryLines; {
+        sprintf('TOLERANS ±%g  (M = %.4f – %.4f)', T.tol, T.low, T.high)
+        sprintf('  Geçen çift:          %d   -> GEÇME ORANI %%%.2f', T.nPass, T.passPct)
+        sprintf('  Alt / üst dışında:   %%%.2f / %%%.2f', T.belowPct, T.abovePct)
+        sprintf('  Cp / Cpk:            %.3f / %.3f', T.Cp, T.Cpk)
+        sprintf('  Normal dağ. tahmini: %%%.2f    Ortalama merkezde: %%%.2f', T.normPassPct, T.centeredPassPct)
+        sprintf('  İzinli |EFL_%s|:    %.4f – %.4f mm  (nominal %s ile)', n2Name, T.efl2Window(1), T.efl2Window(2), n1Name)
+        sprintf('  İzinli |EFL_%s|:    %.4f – %.4f mm  (nominal %s ile)', n1Name, T.efl1Window(1), T.efl1Window(2), n2Name)
+        sprintf('  %s dosyaları:      en az bir %s ile %%%.1f, tümüyle %%%.1f', n1Name, n2Name, T.anyMatch(1), T.allMatch(1))
+        sprintf('  %s dosyaları:      en az bir %s ile %%%.1f, tümüyle %%%.1f', n2Name, n1Name, T.anyMatch(2), T.allMatch(2))
+        ''}]; %#ok<AGROW>
+end
 
 failedText = {};
 for s = 1:2
@@ -515,71 +563,95 @@ for s = 1:2
     end
 end
 if ~isempty(failedText)
-    summaryLines = [summaryLines; {''}; failedText];
+    summaryLines = [summaryLines; failedText];
 end
 
-summaryFig = textPage('BÜYÜTME TOLERANS ANALİZ RAPORU', summaryLines, 'Courier New', 8);
+summaryFig = textPage('BÜYÜTME TOLERANS ANALİZ RAPORU', summaryLines, 'Courier New', 8 - 0.5 * (nTol > 2));
 
 % --- Page: assessment (generated from the results) -----------------------
-assess = {
-    'GENEL SONUÇ'
-    sprintf(['%d %s ve %d %s dosyasından oluşan %d çiftin %d''i büyütme isterini (%s) sağlıyor: ' ...
-     'geçme oranı %%%.2f. Yani yield kümesinden rastgele seçilen bir %s ile bir %s birlikte ' ...
-     'kullanıldığında isteri sağlama olasılığı yaklaşık %%%.1f''dir.'], ...
-     n1, n1Name, n2, n2Name, nPairs, nPass, reqText, passPct, n1Name, n2Name, passPct)
-    ''
-    'NOMİNAL TASARIM'
-    };
-if abs(mNominal - magTarget) > magTol
-    assess{end + 1, 1} = sprintf(['Nominal büyütme M = %.5f, istere uymuyor (sapma %+.5f). Toleranslardan ' ...
-        'önce nominal EFL oranının düzeltilmesi gerekir.'], mNominal, mNominal - magTarget);
-else
-    assess{end + 1, 1} = sprintf(['Nominal büyütme M = %.5f; hedeften sapma %+.5f, yani tolerans bandının ' ...
-        '%%%.0f''i nominal tasarımda kullanılmış.'], mNominal, mNominal - magTarget, ...
-        100 * abs(mNominal - magTarget) / magTol);
+assess = {'GENEL SONUÇ'};
+for t = 1:nTol
+    T = tol(t);
+    assess{end + 1, 1} = sprintf(['•  ±%g (%s): %d çiftin %d''i isteri sağlıyor, geçme oranı %%%.2f. ' ...
+        'Yield kümesinden rastgele seçilen bir %s ile bir %s birlikte kullanıldığında isteri sağlama ' ...
+        'olasılığı yaklaşık %%%.1f''dir.'], T.tol, reqTextOf(T), nPairs, T.nPass, T.passPct, ...
+        n1Name, n2Name, T.passPct); %#ok<SAGROW>
 end
+if nTol > 1
+    assess{end + 1, 1} = sprintf(['Tolerans ±%g''den ±%g''ye daraltıldığında geçme oranı %%%.2f''den ' ...
+        '%%%.2f''ye düşüyor. Dağılım aynı kaldığı için aradaki fark, M''si iki bant arasında kalan çiftlerdir.'], ...
+        tol(end).tol, tol(1).tol, tol(end).passPct, tol(1).passPct);
+end
+
+assess = [assess; {''; 'NOMİNAL TASARIM'}];
+nomDev = mNominal - magTarget;
+nomText = sprintf('Nominal büyütme M = %.5f, hedeften sapma %+.5f.', mNominal, nomDev);
+for t = 1:nTol
+    if abs(nomDev) > tol(t).tol
+        nomText = [nomText sprintf(' ±%g için nominal bile istere uymuyor; önce nominal EFL oranı düzeltilmeli.', ...
+            tol(t).tol)]; %#ok<AGROW>
+    else
+        nomText = [nomText sprintf(' ±%g bandının %%%.0f''i nominalde kullanılmış.', ...
+            tol(t).tol, 100 * abs(nomDev) / tol(t).tol)]; %#ok<AGROW>
+    end
+end
+assess{end + 1, 1} = nomText;
 
 assess = [assess; {''; 'ORTALAMA KAYMASI MI, SAÇILIM MI?'}];
 shift = mMean - magTarget;
-if abs(shift) > 0.2 * magTol
-    assess{end + 1, 1} = sprintf(['Ortalama M = %.5f, hedeften %+.5f kaymış (tolerans bandının %%%.0f''i). ' ...
-        'Ortalama hedefe getirilirse (nominal EFL oranı düzeltilerek) geçme oranı %%%.2f''den %%%.2f''ye çıkar.'], ...
-        mMean, shift, 100 * abs(shift) / magTol, passPct, centeredPassPct);
-else
-    assess{end + 1, 1} = sprintf(['Ortalama M = %.5f, hedefe yakın (sapma %+.5f). Ortalamayı tam merkeze ' ...
-        'almak geçme oranını yalnızca %%%.2f''den %%%.2f''ye çıkarır; kayıp esas olarak dağılımın ' ...
-        'genişliğinden (EFL saçılımı) geliyor.'], mMean, shift, passPct, centeredPassPct);
+assess{end + 1, 1} = sprintf('Ortalama M = %.5f, hedeften sapma %+.5f. Std M = %.5f.', mMean, shift, mStd);
+for t = 1:nTol
+    T = tol(t);
+    if abs(shift) > 0.2 * T.tol
+        assess{end + 1, 1} = sprintf(['•  ±%g: kayma bandın %%%.0f''i kadar, belirgin. Ortalama hedefe ' ...
+            'getirilirse (nominal EFL oranı düzeltilerek) geçme oranı %%%.2f''den %%%.2f''ye çıkar.'], ...
+            T.tol, 100 * abs(shift) / T.tol, T.passPct, T.centeredPassPct); %#ok<SAGROW>
+    else
+        assess{end + 1, 1} = sprintf(['•  ±%g: kayma küçük (bandın %%%.0f''i). Ortalamayı merkeze almak geçme ' ...
+            'oranını yalnızca %%%.2f''den %%%.2f''ye çıkarır; kayıp esas olarak saçılımdan geliyor.'], ...
+            T.tol, 100 * abs(shift) / T.tol, T.passPct, T.centeredPassPct); %#ok<SAGROW>
+    end
 end
 
 assess = [assess; {''; 'SÜREÇ YETERLİLİĞİ (Cpk)'}];
-if Cpk >= 1.33
-    cpkText = 'yeterli (≥ 1.33): dağılım tolerans bandına rahatça sığıyor';
-elseif Cpk >= 1
-    cpkText = 'sınırda (1 – 1.33): dağılım banda sığıyor ama pay az';
-else
-    cpkText = 'yetersiz (< 1): dağılımın kuyrukları tolerans bandının dışına taşıyor';
+for t = 1:nTol
+    T = tol(t);
+    if T.Cpk >= 1.33
+        cpkText = 'yeterli (≥ 1.33): dağılım banda rahatça sığıyor';
+    elseif T.Cpk >= 1
+        cpkText = 'sınırda (1 – 1.33): dağılım banda sığıyor ama pay az';
+    else
+        cpkText = 'yetersiz (< 1): dağılımın kuyrukları bandın dışına taşıyor';
+    end
+    assess{end + 1, 1} = sprintf(['•  ±%g: Cp = %.3f, Cpk = %.3f -> %s. Normal dağılım tahmini %%%.2f ' ...
+        '(ölçülen %%%.2f).'], T.tol, T.Cp, T.Cpk, cpkText, T.normPassPct, T.passPct); %#ok<SAGROW>
 end
-assess{end + 1, 1} = sprintf(['Cp = %.3f, Cpk = %.3f -> %s. Normal dağılım varsayımıyla tahmini geçme ' ...
-    'oranı %%%.2f (ölçülen %%%.2f). İkisi belirgin farklıysa dağılım normal değildir; ölçülen oran esas alınmalı.'], ...
-    Cp, Cpk, cpkText, normPassPct, passPct);
+assess{end + 1, 1} = 'Normal tahmin ile ölçülen oran belirgin farklıysa dağılım normal değildir; ölçülen oran esas alınmalı.';
 
 assess = [assess; {''; 'HANGİ SİSTEM BASKIN?'}];
 [~, dom] = max(contribPct);
-assess{end + 1, 1} = sprintf(['Büyütme saçılımının %%%.1f''i %s, %%%.1f''i %s sisteminin EFL saçılımından geliyor. ' ...
-    'Geçme oranını artırmak için EFL toleranslarını sıkılaştırmada öncelik %s sistemindedir.'], ...
+assess{end + 1, 1} = sprintf(['Büyütme saçılımının %%%.1f''i %s, %%%.1f''i %s sisteminin EFL saçılımından geliyor ' ...
+    '(toleranstan bağımsız). Geçme oranını artırmak için EFL toleranslarını sıkılaştırmada öncelik %s sistemindedir.'], ...
     contribPct(1), n1Name, contribPct(2), n2Name, sys(dom).name);
 
 assess = [assess; {''; 'İZİN VERİLEN EFL ARALIKLARI'}];
-assess{end + 1, 1} = sprintf(['%s nominal (|EFL| = %.4f mm) kabul edilirse %s''in |EFL|''si %.4f – %.4f mm ' ...
-    'aralığında olmalıdır. %s nominal (|EFL| = %.4f mm) kabul edilirse %s''ın |EFL|''si %.4f – %.4f mm ' ...
-    'aralığında olmalıdır.'], n1Name, sys(1).nominalEFL, n2Name, efl2Window(1), efl2Window(2), ...
-    n2Name, sys(2).nominalEFL, n1Name, efl1Window(1), efl1Window(2));
+for t = 1:nTol
+    T = tol(t);
+    assess{end + 1, 1} = sprintf(['•  ±%g: %s nominal (%.4f mm) ise %s |EFL| %.4f – %.4f mm; %s nominal ' ...
+        '(%.4f mm) ise %s |EFL| %.4f – %.4f mm olmalı.'], T.tol, n1Name, sys(1).nominalEFL, n2Name, ...
+        T.efl2Window(1), T.efl2Window(2), n2Name, sys(2).nominalEFL, n1Name, T.efl1Window(1), T.efl1Window(2)); %#ok<SAGROW>
+end
 
 assess = [assess; {''; 'EŞLEŞTİRME (SEÇİCİ MONTAJ) POTANSİYELİ'}];
-assess{end + 1, 1} = sprintf(['%s dosyalarının %%%.1f''i en az bir %s ile, %%%.1f''i tüm %s dosyalarıyla isteri ' ...
-    'sağlıyor. %s dosyalarının %%%.1f''i en az bir %s ile, %%%.1f''i tümüyle sağlıyor. "En az bir" oranı ' ...
-    '"tümü" oranından belirgin büyükse, EFL ölçülüp sistemler eşleştirilerek (seçici montaj) geçme oranı artırılabilir.'], ...
-    n1Name, anyMatch(1), n2Name, allMatch(1), n2Name, n2Name, anyMatch(2), n1Name, allMatch(2));
+for t = 1:nTol
+    T = tol(t);
+    assess{end + 1, 1} = sprintf(['•  ±%g: %s dosyalarının %%%.1f''i en az bir %s ile, %%%.1f''i tümüyle; ' ...
+        '%s dosyalarının %%%.1f''i en az bir %s ile, %%%.1f''i tümüyle isteri sağlıyor.'], T.tol, ...
+        n1Name, T.anyMatch(1), n2Name, T.allMatch(1), n2Name, T.anyMatch(2), n1Name, T.allMatch(2)); %#ok<SAGROW>
+end
+assess{end + 1, 1} = sprintf(['"Tümüyle" oranı, diğer sistemin saçılımı banda sığmıyorsa düşük çıkar (saçılımı büyük ' ...
+    'olan sistemin karşısındaki dosyalar "tümü" testini geçemez). "En az bir" oranı "tümü" oranından belirgin ' ...
+    'büyükse, EFL ölçülüp sistemler eşleştirilerek (seçici montaj) geçme oranı artırılabilir.']);
 
 if min(n1, n2) < 50
     assess = [assess; {''; 'UYARI – ÖRNEKLEM BÜYÜKLÜĞÜ'}];
@@ -589,7 +661,7 @@ if min(n1, n2) < 50
         'en az 50 – 100 MC dosyası önerilir.'], n1, n2, nPairs, n2, n1);
 end
 
-assessFig = textPage('1. SONUÇ VE DEĞERLENDİRME', assess, 'Arial', 10);
+assessFig = textPage('1. SONUÇ VE DEĞERLENDİRME', assess, 'Arial', 10 - 0.5 * (nTol > 1));
 
 % --- Page: method --------------------------------------------------------
 method = {
@@ -626,7 +698,8 @@ method = {
      n1Name, pixelPitch_um(1), pixelScale, pixelPitch_um(2))
     sprintf('        M = (%g × %.2f / %.2f) × |EFL_1| / |EFL_2| = %.6f × |EFL_1| / |EFL_2|', ...
         pixelScale, pixelPitch_um(2), pixelPitch_um(1), magConst)
-    sprintf('Bir çift |M − %.2f| ≤ %.2f ise geçer.', magTarget, magTol)
+    sprintf(['Bir çift, her tolerans için ayrı değerlendirilir: |M − %.2f| ≤ tolerans ise o toleransta geçer ' ...
+     '(bu analizde %s). Büyütme dağılımı toleranstan bağımsızdır; yalnızca kabul bandı değişir.'], magTarget, tolListText)
     ''
     'NEDEN n1 × n2 ÇİFT (n! DEĞİL)?'
     ['n1 × n2, birbirinden farklı tüm ikililerin sayısıdır. n! ise n sistemin hepsini aynı anda birebir ' ...
@@ -638,25 +711,26 @@ methodFig = textPage('2. ANALİZ YÖNTEMİ', method, 'Arial', 10);
 % --- Page: meaning of the statistics -------------------------------------
 meaning = {
     'GEÇME ORANI'
-    ['Kriteri sağlayan çiftlerin tüm çiftlere oranı. Yield kümelerinden rastgele seçilen iki sistemin ' ...
-     'birlikte isteri sağlama olasılığının tahminidir. Alt / üst sınır dışında kalan oranlar, büyütmenin ' ...
-     'hangi yönde sorun çıkardığını gösterir.']
+    ['Kriteri sağlayan çiftlerin tüm çiftlere oranı (her tolerans için ayrı). Yield kümelerinden rastgele ' ...
+     'seçilen iki sistemin birlikte isteri sağlama olasılığının tahminidir. Alt / üst sınır dışında kalan ' ...
+     'oranlar, büyütmenin hangi yönde sorun çıkardığını gösterir.']
     ''
     'ORTALAMA, STD, YÜZDELİKLER'
-    ['Ortalama M''nin hedeften farkı sistematik kaymadır; std saçılımdır. %1 – %99 aralığı, sistemlerin ' ...
-     '%98''inin içinde kaldığı büyütme aralığıdır; bu aralık tolerans bandının içindeyse tasarım güvenlidir. ' ...
-     'Tüm yüzdelikler Excel''de "Percentiles" sayfasındadır.']
+    ['Ortalama M''nin hedeften farkı sistematik kaymadır; std saçılımdır. Bunlar toleranstan bağımsızdır. ' ...
+     '%1 – %99 aralığı, sistemlerin %98''inin içinde kaldığı büyütme aralığıdır; bu aralık bir tolerans ' ...
+     'bandının içindeyse tasarım o tolerans için güvenlidir. Tüm yüzdelikler Excel''de "Percentiles" sayfasındadır.']
     ''
     'Cp VE Cpk'
     ['Cp = bant genişliği / (6σ): dağılımın genişliği banda sığıyor mu? Cpk = ortalamadan en yakın sınıra ' ...
      'uzaklık / (3σ): kayma da hesaba katılır. Cpk ≥ 1.33 yeterli, 1 – 1.33 sınırda, < 1 yetersiz kabul ' ...
-     'edilir. Cp büyük ama Cpk küçükse sorun kaymadır, ikisi de küçükse sorun saçılımdır. Normal dağılım ' ...
-     'varsayar; az dosyayla dikkatli yorumlanmalıdır.']
+     'edilir. Cp büyük ama Cpk küçükse sorun kaymadır, ikisi de küçükse sorun saçılımdır. Bant daraldıkça ' ...
+     'Cp ve Cpk aynı oranda küçülür. Normal dağılım varsayar; az dosyayla dikkatli yorumlanmalıdır.']
     ''
     'ORTALAMA MERKEZDE GEÇME ORANI'
     ['Tüm büyütmeler, ortalama tam hedefe gelecek şekilde ölçeklenirse elde edilecek geçme oranı. Bu, ' ...
-     'nominal EFL oranını (örneğin bir sistemin nominal EFL''sini) düzelterek kazanılabilecek en fazla ' ...
-     'iyileşmeyi gösterir. Mevcut oranla farkı küçükse nominal düzeltme işe yaramaz, toleranslar sıkılaşmalıdır.']
+     'nominal EFL oranını düzelterek kazanılabilecek en fazla iyileşmeyi gösterir. Mevcut oranla farkı ' ...
+     'küçükse nominal düzeltme işe yaramaz, toleranslar sıkılaşmalıdır. Dar toleransta aynı kayma daha ' ...
+     'büyük kayıp yaratır.']
     ''
     'VARYANS KATKISI'
     ['M = sabit × EFL_1 / EFL_2 olduğundan ln M = ln EFL_1 − ln EFL_2 ve var(ln M) = var(ln EFL_1) + ' ...
@@ -666,7 +740,7 @@ meaning = {
     'DOSYA BAZINDA GEÇME ORANI'
     ['Bir dosyanın diğer sistemin dosyalarının yüzde kaçıyla isteri sağladığı. %100: hangi eşle birleşirse ' ...
      'birleşsin çalışır. %0: hiçbiriyle çalışmaz. Oranların EFL''ye göre nasıl düştüğü, o sistem için ' ...
-     'kabul edilebilir EFL sınırını verir. Excel''de sistem başına dosya tablolarında verilmiştir.']
+     'kabul edilebilir EFL sınırını verir. Excel''de sistem başına dosya tablolarında her tolerans için verilmiştir.']
     ''
     'İZİN VERİLEN EFL ARALIĞI'
     ['Bir sistem tam nominal üretilirse, isteri sağlamak için diğer sistemin |EFL|''sinin kalması gereken ' ...
@@ -679,12 +753,14 @@ plotFigs = gobjects(4, 1);
 
 plotFigs(1) = figurePage(fig1, '4. BÜYÜTME DAĞILIMI', {
     'NASIL OKUNUR'
-    sprintf(['•  Her çubuk, büyütmesi o aralıkta olan %s – %s çifti sayısıdır. Yeşil bant isterdir (%s); ' ...
-     'bant içindeki çubuklar geçen çiftlerdir.'], n1Name, n2Name, reqText)
+    sprintf(['•  Her çubuk, büyütmesi o aralıkta olan %s – %s çifti sayısıdır. Renkli bantlar tolerans ' ...
+     'isterleridir (%s); iç içe bantlarda en koyu ve dar olan en sıkı toleranstır. Bir bandın içindeki ' ...
+     'çubuklar o toleransta geçen çiftlerdir; her toleransın geçme oranı lejantta verilmiştir.'], n1Name, n2Name, tolListText)
     ['•  Siyah noktalı çizgi nominal M, turuncu kesikli çizgi tüm çiftlerin ortalama M''sidir. İkisi ' ...
      'farklıysa toleranslar büyütmeyi sistematik olarak bir yöne itiyor demektir.']
     'NASIL YORUMLANIR'
-    '•  Dağılım bandın ortasında ve banttan dar: tasarım güvenli.'
+    ['•  Dağılım bir bandın ortasında ve o banttan dar: tasarım o tolerans için güvenli. Geniş bantta ' ...
+     'güvenli olup dar bantta taşıyorsa, dar isterin karşılanması için saçılım azaltılmalıdır.']
     ['•  Dağılım bir kenara yığılmış veya tek taraftan taşıyor: sorun kaymadır; nominal EFL oranı ' ...
      'düzeltilerek çözülür ("ortalama merkezde geçme oranı" kazancı gösterir).']
     ['•  Dağılım bandın iki tarafından da taşıyor: sorun saçılımdır; EFL toleransları sıkılaştırılmalı ' ...
@@ -693,11 +769,11 @@ plotFigs(1) = figurePage(fig1, '4. BÜYÜTME DAĞILIMI', {
 
 plotFigs(2) = figurePage(fig2, '5. EFL ÇİFT HARİTASI', {
     'NASIL OKUNUR'
-    sprintf(['•  Her nokta bir çifttir: yatay eksen %s |EFL|, dikey eksen %s |EFL|. Yeşil = geçti, ' ...
-     'kırmızı = kaldı. Sarı yıldız nominal tasarımdır.'], n1Name, n2Name)
-    sprintf(['•  Düz siyah çizgi M = %.2f (ideal oran), kesikli çizgiler M = %.2f ve M = %.2f sınırlarıdır; ' ...
-     'kesikli çizgilerin arası kabul bölgesidir. Sol üstte M küçük (< %.2f), sağ altta M büyüktür (> %.2f).'], ...
-     magTarget, magLow, magHigh, magLow, magHigh)
+    sprintf(['•  Her nokta bir çifttir: yatay eksen %s |EFL|, dikey eksen %s |EFL|. Nokta rengi, çiftin ' ...
+     'sağladığı en sıkı toleranstır (koyu yeşil = en dar bantta geçti, açık renk = yalnızca daha geniş ' ...
+     'bantta geçti); kırmızı = hiçbir toleransı sağlamadı. Sarı yıldız nominal tasarımdır.'], n1Name, n2Name)
+    sprintf(['•  Düz siyah çizgi M = %.2f (ideal oran); her toleransın sınırları kendi renginde kesikli ' ...
+     'çizgilerdir. Sol üstte M küçük, sağ altta M büyüktür.'], magTarget)
     'NASIL YORUMLANIR'
     sprintf(['•  Nokta bulutu yatayda genişse saçılım %s''dan, dikeyde genişse %s''den gelir. Bulut kabul ' ...
      'bölgesinin bir tarafına kaymışsa nominal oran düzeltilmelidir.'], n1Name, n2Name)
@@ -707,22 +783,24 @@ plotFigs(2) = figurePage(fig2, '5. EFL ÇİFT HARİTASI', {
 
 plotFigs(3) = figurePage(fig3, '6. DOSYA BAZINDA GEÇME ORANI', {
     'NASIL OKUNUR'
-    ['•  Her nokta bir dosyadır. Yatay eksen dosyanın |EFL|''si, dikey eksen diğer sistemin yield ' ...
-     'kümesindeki dosyaların yüzde kaçıyla isteri sağladığıdır. Noktalı çizgi nominal |EFL|''dir.']
+    ['•  Her nokta bir dosyadır; her tolerans ayrı renk ve işaretle gösterilir. Yatay eksen dosyanın ' ...
+     '|EFL|''si, dikey eksen diğer sistemin yield kümesindeki dosyaların yüzde kaçıyla isteri sağladığıdır. ' ...
+     'Noktalı çizgi nominal |EFL|''dir. Lejantta her tolerans için "en az birine" ve "hepsine" uyan ' ...
+     'dosyaların oranı verilmiştir.']
     'NASIL YORUMLANIR'
     ['•  %100 olan dosyalar diğer sistemin her dosyasıyla çalışır; %0 olanlar hiçbiriyle çalışmaz. ' ...
-     'Genellikle nominal EFL çevresinde yüksek, uçlarda düşük bir tepe şekli görülür; tepe nominalden ' ...
-     'kaymışsa nominal oran düzeltilmelidir.']
+     'Genellikle nominal EFL çevresinde yüksek, uçlarda düşük bir tepe şekli görülür; dar toleransta tepe ' ...
+     'daralır ve alçalır. Tepe nominalden kaymışsa nominal oran düzeltilmelidir.']
     ['•  Oranın hızla düştüğü EFL değerleri, o sistem için kabul edilebilir EFL sınırlarıdır; EFL toleransı ' ...
      'veya EFL''ye göre sınıflama (seçici montaj) için kullanılabilir.']
-    ['•  Başlıktaki "en az birine uyan" oranı, eşleştirme yapılırsa kurtarılabilecek dosyaların oranıdır; ' ...
-     '"hepsine uyan" oranı eşleştirmesiz kesin çalışan dosyaların oranıdır.']
+    ['•  "Hepsine uyan" oranı, diğer sistemin saçılımı banda sığmıyorsa sıfıra iner; saçılımı büyük olan ' ...
+     'sistemin karşısındaki dosyalar bu testi geçemez.']
     }, false);
 
 plotFigs(4) = figurePage(fig4, '7. EFL DAĞILIMLARI', {
     'NASIL OKUNUR'
     sprintf(['•  Gri: tüm geçerli MC dosyalarının |EFL| dağılımı. Mavi: MTF''e göre %%%g yield kümesi ' ...
-     '(çaprazlamada kullanılan dosyalar). Noktalı çizgi nominal |EFL|''dir.'], yieldPct)
+     '(çaprazlamada kullanılan dosyalar). Noktalı çizgi nominal |EFL|''dir. Bu grafik toleranstan bağımsızdır.'], yieldPct)
     'NASIL YORUMLANIR'
     ['•  Mavi histogram griden belirgin farklıysa MTF ile EFL ilişkilidir: MTF''i kötü olup elenen ' ...
      'dosyalar EFL''de de uçtadır.']
@@ -893,6 +971,39 @@ inYield = valid & metric >= threshold;
 [~, order] = sort(metric(valid), 'descend');
 validIdx = find(valid);
 mtfRank(validIdx(order)) = (1:nValid)';
+end
+
+function T = tolStats(M, magTarget, tolValue, mMean, mStd, magConst, nominalEFL1, nominalEFL2)
+% Pass / fail statistics of the magnification matrix M (n1 x n2) for one
+% tolerance: |M - magTarget| <= tolValue.
+T.tol  = tolValue;
+T.low  = magTarget - tolValue;
+T.high = magTarget + tolValue;
+
+mAll = M(:);
+T.pass     = abs(M - magTarget) <= tolValue + 1e-12;
+T.nPass    = sum(T.pass(:));
+T.passPct  = 100 * T.nPass / numel(mAll);
+T.belowPct = 100 * mean(mAll < T.low - 1e-12);
+T.abovePct = 100 * mean(mAll > T.high + 1e-12);
+
+T.Cp  = (T.high - T.low) / (6 * mStd);
+T.Cpk = min(T.high - mMean, mMean - T.low) / (3 * mStd);
+normPhi = @(x) 0.5 * erfc(-x / sqrt(2));
+T.normPassPct = 100 * (normPhi((T.high - mMean) / mStd) - normPhi((T.low - mMean) / mStd));
+
+% If the mean magnification were moved to the target (nominal EFL correction)
+T.centeredPassPct = 100 * mean(abs(mAll * (magTarget / mMean) - magTarget) <= tolValue + 1e-12);
+
+% Allowed |EFL| of one system when the other one is nominal
+T.efl2Window = magConst * nominalEFL1 ./ [T.high, T.low];
+T.efl1Window = nominalEFL2 / magConst * [T.low, T.high];
+
+% Pass rate of each file against all files of the other system
+T.passRate1 = 100 * mean(T.pass, 2);       % n1 x 1
+T.passRate2 = 100 * mean(T.pass, 1).';     % n2 x 1
+T.anyMatch = [100 * mean(T.passRate1 > 0), 100 * mean(T.passRate2 > 0)];
+T.allMatch = [100 * mean(T.passRate1 == 100), 100 * mean(T.passRate2 == 100)];
 end
 
 function q = quantileSorted(x, p)
