@@ -316,7 +316,7 @@ try
         nomDY(:, m) = Dnom(:, methodCols{m}(2));
     end
     nomMag = hypot(nomDX, nomDY);
-    fprintf('Nominal tasarım   : on-axis kayma centroid %.4f, ana ışın %.4f piksel (≈ 0 beklenir)\n', ...
+    fprintf('Nominal tasarım   : on-axis kayma centroid %.3g, ana ışın %.3g piksel (≈ 0 beklenir)\n', ...
         nomMag(1, 1), nomMag(1, 2));
 
     %% 2. MC dosyaları: kompanzatör ve |EFL| her dosyada ayrı bulunur
@@ -350,6 +350,7 @@ try
     cInf = NaN; cNear = NaN; cFlip = NaN;
     signWarning = false;
     checkShift = nan(2, 2);  % on-axis, 0 um: [dx dy] x yöntem
+    diagLines = {};          % ilk dosyanın ham değerleri (Command Window ve PDF)
     tStart = tic;
     wb = waitbar(0, 'Boresight hesaplanıyor...', 'Name', 'Boresight Analizi');
 
@@ -404,6 +405,8 @@ try
             R0 = traceFields(TheSystem, img0, hx, hy, wave, wIdx, wW, pupilPx, pupilPy, true);
             if ~checkPrinted
                 cInf = collimation(TheSystem, img0, wave);
+                opInf = rayTan(TheSystem, img0, wave, 0);   % batch'ten bağımsız kontrol (REAA/REAB/REAC)
+                nSurfBefore = lde.NumberOfSurfaces;
             end
 
             % b. Yakın odak: paraxial ekle, kompanzatörü kaydır
@@ -445,6 +448,22 @@ try
                 % Kontrol: yakın odakta çıkış kolime mi, focal length işareti doğru mu?
                 if ~checkPrinted && lev == 1
                     setThickness(TheSystem, compIdx, t0 + dComp_mm * u);
+                    opNear = rayTan(TheSystem, img, wave, 0);
+                    insSurf = TheSystem.LDE.GetSurfaceAt(insIdx);
+                    diagLines = {
+                        sprintf('  |EFL| = %.6g mm, tan θ -> piksel çarpanı = %.6g', eflK, pixPerTan)
+                        sprintf('  Yüzey sayısı: %d -> %d, eklenen yüzey %d: %s, f = %.6g', nSurfBefore, ...
+                            TheSystem.LDE.NumberOfSurfaces, insIdx, char(insSurf.TypeName), ...
+                            insSurf.GetSurfaceCell(ZOSAPI.Editors.LDE.SurfaceColumn.Par1).DoubleValue)
+                        sprintf('  Kompanzatör yüzey %d kalınlığı: %.6f -> %.6f (okunan)', compIdx, t0, ...
+                            TheSystem.LDE.GetSurfaceAt(compIdx).Thickness)
+                        sprintf('  Ana ışın tan θ (batch)  sonsuz: (%.6e, %.6e)  yakın: (%.6e, %.6e)', ...
+                            R0(1, 1), R0(1, 2), R(1, 1), R(1, 2))
+                        sprintf('  Ana ışın tan θ (REAA)   sonsuz: (%.6e, %.6e)  yakın: (%.6e, %.6e)', ...
+                            opInf(1), opInf(2), opNear(1), opNear(2))
+                        sprintf('  Centroid tan θ (batch)  sonsuz: (%.6e, %.6e)  yakın: (%.6e, %.6e)', ...
+                            R0(1, 3), R0(1, 4), R(1, 3), R(1, 4))
+                        };
                     cNear = collimation(TheSystem, img, wave);
                     setFocal(TheSystem, insIdx, -fNear_mm * u);
                     cFlip = collimation(TheSystem, img, wave);
@@ -459,8 +478,11 @@ try
                         compIdx, t0 / u, t0 / u + dComp_mm);
                     fprintf('  Kolimasyon hatası (Py = +/-0.7 ışın açı farkı): sonsuz %.3g, yakın %.3g, ', cInf, cNear);
                     fprintf('yakın (f işareti ters) %.3g rad\n', cFlip);
-                    fprintf('  On-axis kayma (0 um): centroid dx = %+.4f, dy = %+.4f | ana ışın dx = %+.4f, dy = %+.4f piksel\n\n', ...
+                    fprintf('  On-axis kayma (0 um): centroid dx = %+.4g, dy = %+.4g | ana ışın dx = %+.4g, dy = %+.4g piksel\n', ...
                         checkShift(1, 1), checkShift(2, 1), checkShift(1, 2), checkShift(2, 2));
+                    fprintf('  Tanı değerleri:\n');
+                    fprintf('%s\n', diagLines{:});
+                    fprintf('\n');
                     if signWarning
                         warning(['Focal length işareti ters çevrildiğinde çıkış daha iyi kolime oluyor ' ...
                             '(%.3g < %.3g rad). Yakın odak paraxial focal length işaretini veya Δkomp ' ...
@@ -678,7 +700,7 @@ for lev = 1:nLevels
     xlim(ax, [-lim lim]); ylim(ax, [-lim lim]);
     pbaspect(ax, [1 1 1]);
     xlabel(ax, 'dx (piksel)'); ylabel(ax, 'dy (piksel)');
-    title(ax, {char(levelNames(lev)), sprintf('kesikli daire: yield %d%% = %.3f piksel', yieldTop, rr)});
+    title(ax, {char(levelNames(lev)), sprintf('kesikli daire: yield %d%% = %.3g piksel', yieldTop, rr)});
 end
 
 %% Excel
@@ -804,10 +826,10 @@ if nF > 1
     for f = 1:nF
         row = sprintf('%-24s', char(fieldLabels(f)));
         for lev = 1:nLevels
-            row = [row sprintf('%10.4f', statYield(lev, f, 1, end))]; %#ok<AGROW>
+            row = [row sprintf('%10.3g', statYield(lev, f, 1, end))]; %#ok<AGROW>
         end
         if nomMatch
-            row = [row sprintf('%10.4f', nomMag(f, 1))]; %#ok<AGROW>
+            row = [row sprintf('%10.3g', nomMag(f, 1))]; %#ok<AGROW>
         else
             row = [row sprintf('%10s', '-')]; %#ok<AGROW>
         end
@@ -817,9 +839,9 @@ if nF > 1
 end
 
 summaryLines = [summaryLines; {
-    sprintf('Y%%: dosyaların %%Y''sinde kayma bu değerin altındadır. Örnek: ±0 µm, centroid Y%d%% = %.4f piksel.', ...
+    sprintf('Y%%: dosyaların %%Y''sinde kayma bu değerin altındadır. Örnek: ±0 µm, centroid Y%d%% = %.3g piksel.', ...
         yieldTop, statYield(1, 1, 1, end))
-    sprintf('Nominal tasarım on-axis kayması: centroid %.4f, ana ışın %.4f piksel (≈ 0 beklenir).', nomMag(1, 1), nomMag(1, 2))
+    sprintf('Nominal tasarım on-axis kayması: centroid %.3g, ana ışın %.3g piksel (≈ 0 beklenir).', nomMag(1, 1), nomMag(1, 2))
     ''
     sprintf('KONTROL (%s)', char(checkFile))
     sprintf('  Kolimasyon hatası: sonsuz %.3g rad, yakın %.3g rad, yakın (f işareti ters) %.3g rad', cInf, cNear, cFlip)
@@ -830,8 +852,9 @@ if signWarning
 else
     summaryLines{end + 1, 1} = '  Yakın odak lensinin işareti ve Δkomp yönü tutarlı.';
 end
-summaryLines{end + 1, 1} = sprintf('  On-axis kayma (0 µm): centroid (%+.4f, %+.4f), ana ışın (%+.4f, %+.4f) piksel', ...
+summaryLines{end + 1, 1} = sprintf('  On-axis kayma (0 µm): centroid (%+.3g, %+.3g), ana ışın (%+.3g, %+.3g) piksel', ...
     checkShift(1, 1), checkShift(2, 1), checkShift(1, 2), checkShift(2, 2));
+summaryLines = [summaryLines; diagLines(:)];
 
 if any(~valid)
     summaryLines = [summaryLines; {''; sprintf('Hesaplanamayan dosyalar (%d):', sum(~valid))}];
@@ -1089,11 +1112,11 @@ end
 header = [header sprintf('%10s', 'Max')];
 lines = {header; repmat('-', 1, numel(header))};
 for lev = 1:numel(levels)
-    row = sprintf('%-11s%10.4f%10.4f', sprintf('±%g', levels(lev)), mn(lev), sd(lev));
+    row = sprintf('%-11s%10.3g%10.3g', sprintf('±%g', levels(lev)), mn(lev), sd(lev));
     for y = 1:numel(yieldLevels)
-        row = [row sprintf('%10.4f', yl(lev, y))]; %#ok<AGROW>
+        row = [row sprintf('%10.3g', yl(lev, y))]; %#ok<AGROW>
     end
-    lines{end + 1, 1} = [row sprintf('%10.4f', mx(lev))]; %#ok<AGROW>
+    lines{end + 1, 1} = [row sprintf('%10.3g', mx(lev))]; %#ok<AGROW>
 end
 end
 
