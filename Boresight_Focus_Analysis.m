@@ -56,8 +56,10 @@
 %   Boresight_Results.xlsx : Ozet (seviye başına ortalama, std, yield, max),
 %                            Dosyalar (dosya başına dx, dy, büyüklük, uygulanan
 %                            işaret), Ayarlar (okunan/seçilen tüm değerler)
-%   Boresight_CDF.png      : boresight hatasının kümülatif dağılımı
-%   Boresight_Scatter.png  : dx–dy dağılımı (her seviye için)
+%   Boresight_Report.pdf   : A4; özet tablosu ve kontrol sonucu, yöntem, kapsam ve
+%                            yorum açıklamaları, grafik sayfaları (kümülatif dağılım,
+%                            encoder hatasına göre yield, dx–dy dağılımı)
+%   Boresight_Grafik_*.png : grafik sayfaları
 %   Boresight_RawData.mat  : ham sonuçlar
 
 clc;
@@ -149,6 +151,10 @@ try
     confItems = cellstr(compose('Config %d', (1:nConf)'));
 
     % MCE'den otomatik tespit: IGNR -> yakın odak paraxial yüzeyi ve konfigürasyonlar
+    % (kaynak metinleri PDF raporu için)
+    confSource = "ayar / kullanıcı seçimi";
+    nearSource = "ayar / kullanıcı seçimi";
+    compSource = "ayar / kullanıcı seçimi";
     [thicOps, ignrOps] = readMceOperands(TheSystem);
     if isempty(nomNearSurface)
         isSwitch = false(numel(ignrOps), 1);
@@ -163,7 +169,9 @@ try
         end
         if isscalar(cand)
             nomNearSurface = cand.surf;
+            nearSource = "MCE, IGNR satırı";
             if isempty(infConfig)
+                confSource = "MCE, IGNR satırı (ignore = sonsuz odak)";
                 infConfig = find(cand.val ~= 0, 1);   % ignore -> sonsuz odak
             end
             if isempty(nearConfig)
@@ -211,6 +219,7 @@ try
         end
         if isscalar(cand)
             nomCompSurface = cand.surf;
+            compSource = "MCE, THIC satırı";
         end
     end
 
@@ -290,6 +299,10 @@ try
 
     %% 3. Her MC dosyası için boresight hesabı
     checkPrinted = false;
+    checkFile = "";          % kontrolün yapıldığı dosya (PDF raporu için)
+    cInf = NaN; cNear = NaN; cFlip = NaN;
+    signWarning = false;
+    checkShift = [NaN NaN];
     tStart = tic;
     wb = waitbar(0, 'Boresight hesaplanıyor...', 'Name', 'Boresight Analizi');
 
@@ -369,6 +382,9 @@ try
                     setFocal(TheSystem, insIdx, -fNear_mm * u);
                     cFlip = collimation(TheSystem, img, wave);
                     setFocal(TheSystem, insIdx, fNear_mm * u);
+                    checkFile = string(files(k).name);
+                    checkShift = [dxPix(k, 1), dyPix(k, 1)];
+                    signWarning = isfinite(cNear) && isfinite(cFlip) && cFlip < 0.5 * cNear;
                     fprintf('Kontrol (%s):\n', files(k).name);
                     fprintf('  Kompanzatör yüzey %d: %.6f -> %.6f mm (yakın odak)\n', ...
                         compIdx, t0 / u, t0 / u + dComp_mm);
@@ -457,46 +473,77 @@ if ~isfolder(outFolder)
     mkdir(outFolder);
 end
 
-%% Grafikler
+%% Grafik sayfaları (A4 dikey, sayfa başına iki grafik)
+plotPos = {[0.14 0.58 0.74 0.30], [0.14 0.15 0.74 0.30]};   % üst / alt grafik
 colors = lines(nLevels);
+plotFigs = gobjects(0, 1);
+maxMag = max(magV(:));
+if maxMag == 0, maxMag = 1; end
 
-% Kümülatif dağılım
-figCdf = figure('Color', 'w', 'Position', [100 100 800 500]);
-hold on;
+% Sayfa: kümülatif dağılım (üst) ve encoder hatasına göre yield (alt)
+fig = newA4Page();
+addPageTitle(fig, sprintf('Boresight hatası dağılımı – sonsuz → yakın odak (%d MC dosyası)', nValid));
+
+ax = axes(fig, 'Position', plotPos{1}, 'FontSize', 9, 'FontName', 'Arial');
+hold(ax, 'on');
 for lev = 1:nLevels
     sortedMag = sort(magV(:, lev), 'ascend');
-    stairs([0; sortedMag], [0; (1:nValid)' / nValid * 100], 'LineWidth', 1.5, ...
+    stairs(ax, [0; sortedMag], [0; (1:nValid)' / nValid * 100], 'LineWidth', 1.5, ...
         'Color', colors(lev, :), 'DisplayName', levelNames(lev));
 end
-hold off;
-grid on; box on;
-xlabel('Boresight hatası (piksel)');
-ylabel('Dosyaların yüzdesi (%) – hata bu değerin altında');
-title(sprintf('Sonsuz → yakın odak boresight hatası (%d MC dosyası, piksel %.0f µm)', nValid, pixelPitch_um));
-legend('Location', 'southeast');
-ylim([0 100]);
-set(findall(figCdf, '-property', 'FontName'), 'FontName', 'Arial');
-exportPng(figCdf, fullfile(outFolder, 'Boresight_CDF.png'));
+hold(ax, 'off');
+grid(ax, 'on'); box(ax, 'on');
+xlim(ax, [0 maxMag * 1.05]);
+ylim(ax, [0 100]);
+xlabel(ax, 'Boresight hatası (piksel)');
+ylabel(ax, 'Dosyaların yüzdesi (%)');
+title(ax, 'Kümülatif dağılım: dosyaların ne kadarında hata bu değerin altında');
+legend(ax, 'Location', 'southeast', 'FontSize', 8);
 
-% dx - dy dağılımı
-figSc = figure('Color', 'w', 'Position', [150 150 400 * nLevels 430]);
-lim = max(magV(:)) * 1.1;
-if lim == 0, lim = 1; end
-for lev = 1:nLevels
-    subplot(1, nLevels, lev);
-    plot(dxPix(valid, lev), dyPix(valid, lev), '.', 'Color', colors(lev, :), 'MarkerSize', 10);
-    hold on;
-    th = linspace(0, 2 * pi, 200);
-    r = yieldPix(lev, end);
-    plot(r * cos(th), r * sin(th), 'k--', 'LineWidth', 1);
-    hold off;
-    axis equal; grid on; box on;
-    xlim([-lim lim]); ylim([-lim lim]);
-    xlabel('dx (piksel)'); ylabel('dy (piksel)');
-    title({levelNames(lev), sprintf('kesikli: yield %d%% = %.3f piksel', yieldLevels(end), r)});
+ax = axes(fig, 'Position', plotPos{2}, 'FontSize', 9, 'FontName', 'Arial');
+hold(ax, 'on');
+yColors = lines(nYield);
+for y = 1:nYield
+    plot(ax, levelErrors_um, yieldPix(:, y), '-o', 'Color', yColors(y, :), 'LineWidth', 1.5, ...
+        'MarkerFaceColor', yColors(y, :), 'DisplayName', sprintf('Yield %d%%', yieldLevels(y)));
 end
-set(findall(figSc, '-property', 'FontName'), 'FontName', 'Arial');
-exportPng(figSc, fullfile(outFolder, 'Boresight_Scatter.png'));
+plot(ax, levelErrors_um, max(magV, [], 1), 'k--s', 'LineWidth', 1, 'DisplayName', 'Maksimum');
+hold(ax, 'off');
+grid(ax, 'on'); box(ax, 'on');
+xPad = max(1, 0.05 * (max(levelErrors_um) - min(levelErrors_um)));
+xlim(ax, [min(levelErrors_um) - xPad, max(levelErrors_um) + xPad]);
+xticks(ax, levelErrors_um);
+ylim(ax, [0 maxMag * 1.1]);
+xlabel(ax, 'Encoder hatası ±δ (µm)');
+ylabel(ax, 'Boresight hatası (piksel)');
+title(ax, 'Encoder hatasına göre boresight hatası');
+legend(ax, 'Location', 'northwest', 'FontSize', 8);
+plotFigs(end + 1, 1) = fig;
+
+% Sayfalar: dx - dy dağılımı (sayfa başına iki seviye)
+scPos = {[0.22 0.55 0.56 0.33], [0.22 0.12 0.56 0.33]};
+lim = maxMag * 1.15;
+th = linspace(0, 2 * pi, 200);
+for lev = 1:nLevels
+    slot = mod(lev - 1, 2) + 1;
+    if slot == 1
+        fig = newA4Page();
+        addPageTitle(fig, 'Boresight kayma yönü (dx – dy): her nokta bir MC dosyası');
+        plotFigs(end + 1, 1) = fig; %#ok<SAGROW>
+    end
+    ax = axes(fig, 'Position', scPos{slot}, 'FontSize', 9, 'FontName', 'Arial');
+    plot(ax, dxPix(valid, lev), dyPix(valid, lev), '.', 'Color', colors(lev, :), 'MarkerSize', 10);
+    hold(ax, 'on');
+    r = yieldPix(lev, end);
+    plot(ax, r * cos(th), r * sin(th), 'k--', 'LineWidth', 1);
+    plot(ax, 0, 0, 'k+', 'MarkerSize', 10, 'LineWidth', 1);
+    hold(ax, 'off');
+    grid(ax, 'on'); box(ax, 'on');
+    xlim(ax, [-lim lim]); ylim(ax, [-lim lim]);
+    pbaspect(ax, [1 1 1]);
+    xlabel(ax, 'dx (piksel)'); ylabel(ax, 'dy (piksel)');
+    title(ax, {char(levelNames(lev)), sprintf('kesikli daire: yield %d%% = %.3f piksel', yieldLevels(end), r)});
+end
 
 %% Excel
 outputFile = fullfile(outFolder, 'Boresight_Results.xlsx');
@@ -538,9 +585,284 @@ save(fullfile(outFolder, 'Boresight_RawData.mat'), 'fileNames', 'status', 'level
     'efl_mm', 'pixelPitch_um', 'infConfig', 'nearConfig', 'nomCompSurface', 'nomNearSurface', ...
     'mcCompSurface', 'mcInsertAfter', 'nominalName');
 
+%% PDF raporu (A4): özet, yöntem, yorum, grafik sayfaları
+pdfFile = fullfile(outFolder, 'Boresight_Report.pdf');
+
+oldPages = dir(fullfile(outFolder, 'Boresight_Report_page*.pdf'));
+for i = 1:numel(oldPages)
+    delete(fullfile(outFolder, oldPages(i).name));
+end
+if isfile(pdfFile)
+    delete(pdfFile);
+end
+% Eski rapor silinemediyse (ör. PDF okuyucuda açık) yeni rapor zaman damgalı adla kaydedilir
+if isfile(pdfFile)
+    pdfFile = fullfile(outFolder, ['Boresight_Report_' char(datetime('now', 'Format', 'yyyyMMdd_HHmmss')) '.pdf']);
+    fprintf('\nBoresight_Report.pdf başka bir programda açık; yeni rapor: %s\n', pdfFile);
+end
+
+errListText = char(strjoin(string(compErrors_um), ', '));
+mcCompText = char(strjoin(string(unique(compSurfUsed(valid))'), ', '));
+eflMin = min(eflUsed(valid));
+eflMax = max(eflUsed(valid));
+if abs(eflMax - eflMin) < 5e-5
+    eflText = sprintf('%.4f mm', eflMin);
+else
+    eflText = sprintf('%.4f – %.4f mm (her dosyanın kendi EFL''i)', eflMin, eflMax);
+end
+if isempty(mcInsertAfter)
+    insertText = 'görüntü yüzeyinden hemen önce';
+else
+    insertText = sprintf('yüzey %d''den sonra', mcInsertAfter);
+end
+yieldTop = yieldLevels(end);
+
+% --- Sayfa: özet ---------------------------------------------------------
+summaryLines = {
+    sprintf('Tarih:                  %s', char(datetime('now', 'Format', 'dd.MM.yyyy HH:mm')))
+    sprintf('Klasör:                 %s', folderPath)
+    sprintf('Nominal yakın odak:     %s', nominalName)
+    sprintf('MC dosyaları:           %s*  (geçerli: %d / %d)', filePrefix, nValid, nFiles)
+    sprintf('Konfigürasyonlar:       sonsuz = %d, yakın = %d  (%s)', infConfig, nearConfig, char(confSource))
+    sprintf('Kompanzatör (nominal):  yüzey %d, Δkomp = %+.4f mm  (%s)', nomCompSurface, dComp_mm, char(compSource))
+    sprintf('Yakın odak lensi:       yüzey %d, f = %.6g mm  (%s)', nomNearSurface, fNear_mm, char(nearSource))
+    sprintf('MC kompanzatör:         yüzey %s', mcCompText)
+    sprintf('MC yakın odak lensi:    %s, thickness 0', insertText)
+    sprintf('|EFL|:                  %s', eflText)
+    sprintf('Piksel boyutu:          %.2f µm', pixelPitch_um)
+    sprintf('Encoder hatası:         ±%s µm (kötü taraf)', errListText)
+    'Boresight:              on-axis ana ışın (Hx = Hy = 0, Px = Py = 0), ana dalga boyu'
+    ''
+    'BORESIGHT HATASI ÖZETİ (piksel) – sonsuz odak → yakın odak'
+    ''
+    };
+
+header = sprintf('%-11s%10s%10s', 'Hata (µm)', 'Ortalama', 'Std');
+for y = 1:nYield
+    header = [header sprintf('%10s', sprintf('Y%d%%', yieldLevels(y)))]; %#ok<AGROW>
+end
+header = [header sprintf('%10s', 'Max')];
+summaryLines = [summaryLines; {header; repmat('-', 1, numel(header))}];
+for lev = 1:nLevels
+    row = sprintf('%-11s%10.4f%10.4f', sprintf('±%g', levelErrors_um(lev)), Ozet.Ortalama_piksel(lev), Ozet.Std_piksel(lev));
+    for y = 1:nYield
+        row = [row sprintf('%10.4f', yieldPix(lev, y))]; %#ok<AGROW>
+    end
+    summaryLines{end + 1, 1} = [row sprintf('%10.4f', Ozet.Max_piksel(lev))]; %#ok<SAGROW>
+end
+summaryLines = [summaryLines; {
+    ''
+    'Y%: dosyaların %Y''sinde boresight hatası bu değerin altındadır.'
+    sprintf('Örnek: ±0 µm satırında Y%d%% = %.4f piksel -> dosyaların %%%d''ında hata %.4f pikselden küçük.', ...
+        yieldTop, yieldPix(1, end), yieldTop, yieldPix(1, end))
+    ''
+    sprintf('KONTROL (%s)', char(checkFile))
+    sprintf('  Kolimasyon hatası: sonsuz %.3g rad, yakın %.3g rad, yakın (f işareti ters) %.3g rad', cInf, cNear, cFlip)
+    }];
+if signWarning
+    summaryLines{end + 1, 1} = ['  UYARI: Focal length işareti ters çevrildiğinde çıkış daha iyi kolime oluyor. ' ...
+        'Yakın odak lensinin işaretini veya Δkomp yönünü kontrol edin.'];
+else
+    summaryLines{end + 1, 1} = '  Yakın odak lensinin işareti ve Δkomp yönü tutarlı.';
+end
+summaryLines{end + 1, 1} = sprintf('  Boresight kayması (0 µm): dx = %+.4f, dy = %+.4f piksel', checkShift(1), checkShift(2));
+
+failed = fileNames(~valid);
+if ~isempty(failed)
+    summaryLines = [summaryLines; {''; sprintf('Hesaplanamayan dosyalar (%d):', numel(failed))}];
+    shown = find(~valid);
+    shown = shown(1:min(end, 8));
+    for i = shown'
+        summaryLines{end + 1, 1} = sprintf('  %s: %s', fileNames(i), status(i)); %#ok<SAGROW>
+    end
+    if sum(~valid) > numel(shown)
+        summaryLines{end + 1, 1} = sprintf('  ... ve %d dosya daha (Excel, Dosyalar sayfası)', sum(~valid) - numel(shown));
+    end
+end
+
+summaryFig = textPage('BORESIGHT HATASI – SONSUZ → YAKIN ODAK ANALİZ RAPORU', summaryLines, 'Courier New', 8.5);
+
+% --- Sayfa: yöntem -------------------------------------------------------
+explain1 = {
+    'AMAÇ'
+    ['Sistem sonsuz odaktan yakın odağa geçtiğinde yalnızca kompanzatör lens eksen boyunca hareket eder. ' ...
+     'Nominal (hatasız) sistemde bu hareket görüş eksenini (boresight) değiştirmez. Üretilmiş bir ' ...
+     'sistemde ise lensler decenter/tilt hatalı olduğu için kompanzatörün hareketi ve yakın hedefin ' ...
+     'paralaksı görüş eksenini kaydırır: sonsuz odakta merkez pikselin baktığı hedef, yakın odakta ' ...
+     'başka bir piksele düşer. Bu analiz, Monte Carlo (MC) dosyalarının her biri için bu kaymayı ' ...
+     'piksel cinsinden hesaplar.']
+    ''
+    'ADIM 1 – NOMİNAL YAKIN ODAK DOSYASI'
+    sprintf(['Nominal dosyada (%s) iki konfigürasyon vardır. Yakın odak, görüntü tarafına eklenen bir ' ...
+     'paraxial yüzeyle simüle edilir ve konfigürasyonlar arasında yalnızca kompanzatör kalınlığı ' ...
+     'değişir. Bu dosyadan iki değer okunur:'], nominalName)
+    sprintf('•  Δkomp = kompanzatör kalınlığı (yakın) − (sonsuz) = %+.4f mm (yüzey %d).', dComp_mm, nomCompSurface)
+    sprintf('•  Yakın odak lensinin focal length''i f = %.6g mm (yüzey %d, yakın odak konfigürasyonunda).', fNear_mm, nomNearSurface)
+    ['Yakın odak paraxial yüzeyi MCE''deki IGNR satırından (ignore = sonsuz odak), kompanzatör ise iki ' ...
+     'konfigürasyonda değeri değişen THIC satırından bulunur. Yorum (comment) alanı kullanılmaz.']
+    ''
+    'ADIM 2 – SONSUZ ODAK (HER MC DOSYASI)'
+    ['MC dosyası afokal modda, kaydedildiği haliyle açılır (toleranslar uygulanmış, kompanzatör sonsuz ' ...
+     'odağa optimize edilmiş). Kompanzatör, dosyada kalınlığı variable olan yüzeydir (toleranslama ' ...
+     'coordinate break eklediği için yüzey numarası her dosyada ayrıca bulunur). On-axis ana ışının ' ...
+     '(Hx = Hy = 0, Px = Py = 0, ana dalga boyu) görüntü uzayındaki yönü okunur: tan θx = L/N, ' ...
+     'tan θy = M/N (REAA, REAB, REAC).']
+    ''
+    'ADIM 3 – YAKIN ODAK (AYNI MC DOSYASI)'
+    sprintf(['Aynı dosyaya, nominal dosyadaki gibi bir yakın odak paraxial yüzeyi eklenir (%s, ' ...
+     'thickness 0, f = %.6g mm) ve kompanzatör kalınlığı Δkomp kadar değiştirilir. Böylece hatalar ' ...
+     'aynen korunur, yalnızca odak değişir. Ana ışının yönü tekrar okunur. Hiçbir adımda optimizasyon ' ...
+     'yapılmaz; hesaptan sonra eklenen yüzey silinir, kompanzatör geri alınır ve diskteki dosyalar ' ...
+     'değiştirilmez.'], insertText, fNear_mm)
+    ''
+    'ADIM 4 – PİKSELE ÇEVİRME'
+    '   Boresight hatası [piksel] = (tan θ_yakın − tan θ_sonsuz) × |EFL| / piksel boyutu'
+    ['Bu, dedektör tarafına f = |EFL| bir paraxial lens koyup ışının dedektördeki yerini okumakla ' ...
+     'aynıdır: y = f · tan θ ve bu değer ışının lense çarptığı yükseklikten bağımsızdır. dx, dy ve ' ...
+     'büyüklük √(dx² + dy²) ayrı ayrı kaydedilir.']
+    ''
+    'ADIM 5 – ENCODER (KOMPANZATÖR KONUM) HATASI'
+    sprintf(['Yakın odakta kompanzatör, mekanizmanın konumlandırma hatası kadar yanlış konumlanabilir. ' ...
+     'Her hata payı δ (%s µm) için kompanzatör Δkomp + δ ve Δkomp − δ konumlarına getirilir; ' ...
+     'boresight hatasını büyüten taraf (worst case) o dosya için kullanılır. Uygulanan işaret ' ...
+     'Excel''deki Dosyalar sayfasındadır.'], errListText)
+    ''
+    'ADIM 6 – İSTATİSTİK'
+    ['Her hata payı için tüm geçerli dosyaların boresight hatası istatistiğe sokulur: ortalama, ' ...
+     'standart sapma, maksimum ve yield değerleri. Yield %Y değeri, dosyaların %Y''sinin altında ' ...
+     'kaldığı boresight hatasıdır; üretim açısından "sistemlerin %Y''sinde boresight kayması bu ' ...
+     'değerden küçüktür" anlamına gelir.']
+    };
+
+% --- Sayfa: yorum --------------------------------------------------------
+explain2 = {
+    'KONTROL: YAKIN ODAK DOĞRU SİMÜLE EDİLDİ Mİ?'
+    ['İlk geçerli MC dosyasında çıkışın kolime olup olmadığına bakılır: Py = +0.7 ve Py = −0.7 ' ...
+     'ışınlarının açı farkı (kolimasyon hatası). Yakın odakta bu değer sonsuz odaktakine yakın ' ...
+     'olmalıdır. Ayrıca yakın odak lensinin focal length işareti ters çevrilerek aynı değer ' ...
+     'hesaplanır; ters işaret belirgin şekilde daha iyi kolimasyon veriyorsa (yarısından küçük) ' ...
+     'uyarı verilir. Sistem dedektörden sahneye doğru tasarlandığında, sonlu uzaklıktaki bir sahne ' ...
+     'noktası çıkışta yakınsayan bir ışın demektir; bunu kolime eden lensin işareti, nominal ' ...
+     'dosyadaki Δkomp yönüyle tutarlı olmalıdır.']
+    ''
+    'BU ANALİZ NEYİ KAPSAR?'
+    ['Tolerans analizinin MC dosyalarına uyguladığı tüm hatalar (lens decenter/tilt, yüzey hataları, ' ...
+     'boşluklar vb.) sonsuz ve yakın odakta AYNI kalır. Hesaplanan kayma, bu hatalı sistemde ' ...
+     'kompanzatörün eksenel hareketinden ve yakın hedefin paralaksından kaynaklanan boresight ' ...
+     'değişimidir. Bu kayma her seferinde aynı olduğu için (sistematik) odak konumuna göre bir ' ...
+     'kalibrasyon tablosuyla yazılımda düzeltilebilir.']
+    ''
+    'BU ANALİZ NEYİ KAPSAMAZ?'
+    ['•  Kızak hatası: Lensin kızak boyunca hareket ederken farklı decenter/tilt alması (kızağın ' ...
+     'optik eksene göre açısı ve düzlüğü). MC dosyalarında kompanzatörün hatası her iki odakta ' ...
+     'aynıdır. Bu etki için MCE''de konfigürasyon başına decenter/tilt (TMCO) toleransı gerekir.']
+    ['•  Gidiş-dönüş (tekrarlanabilirlik) hatası: Lens yakın odaktan sonsuza döndüğünde ilk konumuna ' ...
+     'tam oturmaması (boşluk, histerezis). Bu hata rastgeledir ve kalibre edilemez.']
+    ['•  Yalnızca on-axis ana ışın kullanılır; diğer fieldler ve görüntü centroid''i (koma etkisi) ' ...
+     'bu sürümde yoktur.']
+    ''
+    'GRAFİKLER NASIL OKUNUR?'
+    ['•  Kümülatif dağılım: Yatay eksende boresight hatası (piksel), dikey eksende bu değerin altında ' ...
+     'kalan dosyaların yüzdesi. Eğri sola ne kadar yakınsa sistem o kadar iyidir. Eğrinin %90 ' ...
+     'çizgisini kestiği yer, yield %90 değeridir.']
+    ['•  Encoder hatasına göre boresight hatası: Her yield seviyesinin ve maksimum değerin hata ' ...
+     'payıyla değişimi. Eğri yataysa encoder hatası boresight''ı pratikte etkilemiyordur.']
+    sprintf(['•  dx – dy dağılımı: Her nokta bir MC dosyasının kayma vektörüdür. Noktaların merkez ' ...
+     'etrafında rastgele dağılması beklenir; tek bir yönde toplanması sistematik bir hatayı ' ...
+     'gösterir. Kesikli daire yield %%%d değeridir.'], yieldTop)
+    ''
+    'SPESİFİKASYON NASIL KONUR?'
+    '1.  Kabul edilebilir boresight hatasını piksel cinsinden belirle (ör. 0.5 piksel).'
+    ['2.  Özet tablosunda ilgili yield seviyesindeki (ör. Y90%) değeri bu sınırla karşılaştır. ' ...
+     'Encoder hatası satırları, mekanizmanın konumlandırma hassasiyetinin sonuca etkisini gösterir.']
+    ['3.  Sınır aşılıyorsa: kalibrasyonla düzeltme (sistematik kısım), hareketli lensin ve ' ...
+     'arkasındaki lenslerin decenter/tilt toleranslarının sıkılaştırılması ya da mekanizmanın ' ...
+     'iyileştirilmesi değerlendirilir. Hangi toleransın en çok katkı verdiğini görmek için Zemax''te ' ...
+     'boresight farkını kriter alan bir sensitivity analizi yapılabilir.']
+    };
+
+explainFig1 = textPage('1. ANALİZ YÖNTEMİ', explain1, 'Arial', 9.5);
+explainFig2 = textPage('2. KONTROL, KAPSAM VE YORUM', explain2, 'Arial', 9.5);
+
+% --- Sayfaları birleştir: çerçeve, başlık ve sayfa numaraları -------------
+allFigs = [summaryFig; explainFig1; explainFig2; plotFigs];
+nPages = numel(allFigs);
+headerText = sprintf('Boresight Hatası – Sonsuz → Yakın Odak  |  %s', nominalName);
+for p = 1:nPages
+    addPageFrame(allFigs(p), headerText, p, nPages);
+end
+
+% Grafik sayfalarının PNG'leri
+for p = 1:numel(plotFigs)
+    exportPng(plotFigs(p), fullfile(outFolder, sprintf('Boresight_Grafik_%d.png', p)));
+end
+
+try
+    % Çok sayfalı PDF (exportgraphics 'Append' R2021b+ gerektirir)
+    exportgraphics(allFigs(1), pdfFile, 'ContentType', 'vector');
+    for p = 2:nPages
+        exportgraphics(allFigs(p), pdfFile, 'ContentType', 'vector', 'Append', true);
+    end
+    fprintf('\nPDF raporu: %s\n', pdfFile);
+catch pdfErr
+    % Eski MATLAB: her sayfa ayrı A4 PDF
+    fprintf('\nÇok sayfalı PDF oluşturulamadı: %s\n', pdfErr.message);
+    if isfile(pdfFile)
+        delete(pdfFile);
+    end
+    for p = 1:nPages
+        print(allFigs(p), fullfile(outFolder, sprintf('Boresight_Report_page%d.pdf', p)), '-dpdf');
+    end
+    fprintf('Rapor ayrı sayfalar olarak kaydedildi (Boresight_Report_page*.pdf).\n');
+end
+
+close(allFigs);
+
 fprintf('\nÇıktılar: %s\n', outFolder);
 
 %% ===================== YARDIMCI FONKSİYONLAR =====================
+
+function fig = newA4Page()
+% Boş A4 dikey sayfa (21 x 29.7 cm). Görünmez; boyutu ekranla sınırlanmaz.
+fig = figure('Visible', 'off', 'Color', 'w', 'Units', 'centimeters', ...
+    'Position', [1 1 21 29.7], 'PaperUnits', 'centimeters', ...
+    'PaperSize', [21 29.7], 'PaperPosition', [0 0 21 29.7]);
+end
+
+function addPageTitle(fig, titleText)
+% Arial açıkça verilir: varsayılan fontta PDF'te Türkçe karakterler yok
+annotation(fig, 'textbox', [0.06 0.915 0.88 0.04], 'String', titleText, ...
+    'FontName', 'Arial', 'FontSize', 11, 'FontWeight', 'bold', 'HorizontalAlignment', 'center', ...
+    'VerticalAlignment', 'middle', 'EdgeColor', 'none', 'Interpreter', 'none');
+end
+
+function fig = textPage(titleText, lines, fontName, fontSize)
+% Başlık ve kaydırılmış metin içeren A4 sayfa (her hücre bir paragraf/satır)
+fig = newA4Page();
+annotation(fig, 'textbox', [0.08 0.89 0.84 0.05], 'String', titleText, ...
+    'FontName', 'Arial', 'FontSize', 14, 'FontWeight', 'bold', 'EdgeColor', 'none', ...
+    'Interpreter', 'none', 'VerticalAlignment', 'top');
+annotation(fig, 'textbox', [0.08 0.06 0.84 0.83], 'String', lines, ...
+    'FontName', fontName, 'FontSize', fontSize, 'EdgeColor', 'none', ...
+    'Interpreter', 'none', 'VerticalAlignment', 'top', 'FitBoxToText', 'off');
+end
+
+function addPageFrame(fig, headerText, pageNo, nPages)
+% Üst bilgi, sayfa numaralı alt bilgi ve neredeyse beyaz sayfa çerçevesi. Çerçeve,
+% exportgraphics içeriğe göre kırptığında tüm A4 sayfanın korunmasını sağlar.
+ax = axes(fig, 'Position', [0 0 1 1], 'Visible', 'off', 'XLim', [0 1], 'YLim', [0 1]);
+hold(ax, 'on');
+plot(ax, [0.001 0.999 0.999 0.001 0.001], [0.001 0.001 0.999 0.999 0.001], ...
+    '-', 'Color', [0.995 0.995 0.995], 'LineWidth', 0.5);
+plot(ax, [0.06 0.94], [0.965 0.965], '-', 'Color', [0.6 0.6 0.6], 'LineWidth', 0.5);
+plot(ax, [0.06 0.94], [0.035 0.035], '-', 'Color', [0.6 0.6 0.6], 'LineWidth', 0.5);
+text(ax, 0.06, 0.970, headerText, 'FontName', 'Arial', 'FontSize', 8, 'Color', [0.4 0.4 0.4], ...
+    'VerticalAlignment', 'bottom', 'Interpreter', 'none');
+text(ax, 0.94, 0.030, sprintf('Sayfa %d / %d', pageNo, nPages), 'FontName', 'Arial', 'FontSize', 8, ...
+    'Color', [0.4 0.4 0.4], 'HorizontalAlignment', 'right', 'VerticalAlignment', 'top', ...
+    'Interpreter', 'none');
+hold(ax, 'off');
+end
 
 function loadFile(TheSystem, filePath)
 if ~TheSystem.LoadFile(filePath, false)
