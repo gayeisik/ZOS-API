@@ -13,15 +13,19 @@
 %   - MC dosyaları: adı filePrefix ile başlayan .zmx. Afokal mod, sonsuz odak,
 %     tek konfigürasyon (tolerans analizinin kaydettiği haliyle).
 %
-% YÜZEY SEÇİMİ
-%   Yüzeyler yorum (comment) alanından bulunmaz; çalışırken kullanıcıya liste
-%   ile sorulur. Listede kalınlığı konfigürasyonlar arasında değişen ve
-%   variable olan yüzeyler ile paraxial yüzeyler işaretlenir (öneri olarak).
-%   Ayarlarda numara verilirse o soru sorulmaz.
-%   MC dosyalarının yüzey numaraları nominalden farklıdır (toleranslama
-%   coordinate break ekler), bu yüzden MC yüzeyleri ilk MC dosyası üzerinde
-%   ayrıca sorulur. Tüm MC dosyaları aynı TDE'den üretildiği için numaralar
-%   bütün MC dosyalarında aynıdır; yüzey sayısı farklı olan dosya hata verir.
+% OTOMATİK TESPİT (yorum/comment alanı kullanılmaz)
+%   Nominal yakın odak dosyasında, MCE'den:
+%     - Yakın odak paraxial yüzeyi: IGNR satırının yüzeyi. Ignore olduğu (1)
+%       konfigürasyon sonsuz odak, ignore olmadığı (0) konfigürasyon yakın odaktır.
+%     - Kompanzatör: değeri sonsuz ve yakın odak arasında değişen THIC satırının
+%       yüzeyi (sonsuz odakta 0, yakın odakta 0 olmayan).
+%   Her MC dosyasında (yüzey numaraları nominalden farklı olabilir, çünkü
+%   toleranslama coordinate break ekler; bu yüzden her dosyada ayrı bulunur):
+%     - Kompanzatör: kalınlığı variable olan tek yüzey.
+%     - Yakın odak paraxial yüzeyi görüntü yüzeyinden hemen önce eklenir.
+%     - |EFL|: dosyanın kendi EFL'i (afokal modda EFFL).
+%   Tespit edilemezse ya da birden fazla aday varsa kullanıcıya liste ile
+%   sorulur. Ayarlarda değer verilirse tespit yapılmaz, o değer kullanılır.
 %
 % NASIL ÇALIŞIR
 %   1. Nominal dosyadan:
@@ -31,7 +35,7 @@
 %      a. Sonsuz odak: dosya olduğu gibi. On-axis ana ışının (Hx=Hy=0,
 %         Px=Py=0, ana dalga boyu) görüntü uzayındaki yönü okunur:
 %         tan θx = L/N, tan θy = M/N (REAA, REAB, REAC).
-%      b. Yakın odak: seçilen yüzeyden sonra paraxial yüzey eklenir
+%      b. Yakın odak: görüntü yüzeyinden hemen önce paraxial yüzey eklenir
 %         (thickness 0, focal length f_yakın) ve kompanzatör kalınlığı
 %         T0 + Δkomp (± δ) yapılır. Yön tekrar okunur.
 %      c. Boresight hatası [piksel] = (tan θ_yakın − tan θ_sonsuz) × |EFL| / piksel
@@ -68,14 +72,14 @@ compErrors_um = [8 16];          % yakın odakta kompanzatör (encoder) hatası,
 yieldLevels   = [50 80 90 95];   % yield seviyeleri (%): dosyaların %Y'si bu değerin altında
 nFilesMax     = Inf;             % hızlı deneme için yalnızca ilk N MC dosyası
 
-% Konfigürasyon ve yüzey seçimi: [] = çalışırken sorulur
+% Konfigürasyon ve yüzeyler: [] = otomatik (açıklama yukarıda), gerekirse sorulur
 infConfig      = [];   % nominal dosyada sonsuz odak konfigürasyonu
 nearConfig     = [];   % nominal dosyada yakın odak konfigürasyonu
-nomCompSurface = [];   % nominal dosyada kompanzatör yüzeyi (kalınlığı hareket eden)
+nomCompSurface = [];   % nominal dosyada kompanzatör yüzeyi
 nomNearSurface = [];   % nominal dosyada yakın odak paraxial yüzeyi
-mcCompSurface  = [];   % MC dosyalarında kompanzatör yüzeyi
-mcInsertAfter  = [];   % MC dosyalarında yakın odak paraxial yüzeyi BU yüzeyden sonra eklenir
-efl_mm         = [];   % |EFL| (mm); [] = ilk MC dosyasından okunur ve onay için sorulur
+mcCompSurface  = [];   % MC dosyalarında kompanzatör yüzeyi ([] = her dosyada variable kalınlık)
+mcInsertAfter  = [];   % MC'de paraxial BU yüzeyden sonra eklenir ([] = görüntüden hemen önce)
+efl_mm         = [];   % |EFL| (mm) ([] = her MC dosyasının kendi EFL'i)
 
 %% Klasör seçimi
 folderPath = uigetdir(pwd, 'Klasörü seçin (nominal yakın odak dosyası + MC dosyaları)');
@@ -127,6 +131,8 @@ dyPix = nan(nFiles, nLevels);        % boresight kayması y (piksel)
 appliedSign = zeros(nFiles, nLevels);% +1 / -1: uygulanan encoder hatası işareti (0: hatasız)
 compT0 = nan(nFiles, 1);             % MC dosyasındaki kompanzatör kalınlığı
 tanInf = nan(nFiles, 2);             % sonsuz odakta ana ışın yönü (tan θx, tan θy)
+compSurfUsed = nan(nFiles, 1);       % MC dosyasında kullanılan kompanzatör yüzeyi
+eflUsed = nan(nFiles, 1);            % MC dosyasında kullanılan |EFL| (mm)
 
 try
     TheSystem = TheApplication.PrimarySystem;
@@ -141,6 +147,37 @@ try
     end
 
     confItems = cellstr(compose('Config %d', (1:nConf)'));
+
+    % MCE'den otomatik tespit: IGNR -> yakın odak paraxial yüzeyi ve konfigürasyonlar
+    [thicOps, ignrOps] = readMceOperands(TheSystem);
+    if isempty(nomNearSurface)
+        isSwitch = false(numel(ignrOps), 1);
+        for i = 1:numel(ignrOps)
+            v = ignrOps(i).val;
+            isSwitch(i) = any(v ~= 0) && any(v == 0);   % bazı config'lerde ignore, bazılarında değil
+        end
+        cand = ignrOps(isSwitch);
+        if numel(cand) > 1
+            names = arrayfun(@(r) sprintf('Yüzey %d: IGNR %s', r.surf, mat2str(r.val)), cand, 'UniformOutput', false);
+            cand = cand(askList(names, 'Birden fazla IGNR satırı var. Yakın odak paraxial yüzeyi hangisi?', 1, 'Nominal dosya'));
+        end
+        if isscalar(cand)
+            nomNearSurface = cand.surf;
+            if isempty(infConfig)
+                infConfig = find(cand.val ~= 0, 1);   % ignore -> sonsuz odak
+            end
+            if isempty(nearConfig)
+                nearList = find(cand.val == 0);       % ignore değil -> yakın odak
+                if isscalar(nearList)
+                    nearConfig = nearList;
+                else
+                    nearConfig = nearList(askList(confItems(nearList), ...
+                        'Birden fazla yakın odak konfigürasyonu var. Hangisi?', 1, 'Nominal dosya'));
+                end
+            end
+        end
+    end
+
     if isempty(infConfig)
         infConfig = askList(confItems, 'SONSUZ odak konfigürasyonu:', 1, 'Nominal dosya');
     end
@@ -160,7 +197,24 @@ try
     changed = abs(tNearAll - tInfAll) > 1e-12;
     isParax = ~isnan(fNearAll) | ~isnan(fInfAll);
 
-    % Kompanzatör: listede kalınlığı değişen yüzeyler "*" ile işaretlenir
+    % MCE'den otomatik tespit: değeri değişen THIC satırı -> kompanzatör
+    if isempty(nomCompSurface)
+        isMove = false(numel(thicOps), 1);
+        for i = 1:numel(thicOps)
+            isMove(i) = abs(thicOps(i).val(nearConfig) - thicOps(i).val(infConfig)) > 1e-12;
+        end
+        cand = thicOps(isMove);
+        if numel(cand) > 1
+            names = arrayfun(@(r) sprintf('Yüzey %d: THIC %.6g -> %.6g', r.surf, r.val(infConfig), ...
+                r.val(nearConfig)), cand, 'UniformOutput', false);
+            cand = cand(askList(names, 'Birden fazla THIC satırı değişiyor. Kompanzatör hangisi?', 1, 'Nominal dosya'));
+        end
+        if isscalar(cand)
+            nomCompSurface = cand.surf;
+        end
+    end
+
+    % Tespit edilemediyse sor: kalınlığı değişen yüzeyler "*" ile işaretlenir
     if isempty(nomCompSurface)
         marks = repmat("", nNomSurf, 1);
         marks(changed) = "  * kalınlık değişiyor";
@@ -174,7 +228,7 @@ try
     end
     checkSurface(nomCompSurface, nNomSurf, 'nomCompSurface');
 
-    % Yakın odak paraxial yüzeyi
+    % Yakın odak paraxial yüzeyi tespit edilemediyse sor
     if isempty(nomNearSurface)
         marks = repmat("", nNomSurf, 1);
         marks(isParax) = "  * paraxial";
@@ -210,63 +264,31 @@ try
     fprintf('Kompanzatör       : yüzey %d, Δkomp = %+.6f mm (yakın − sonsuz)\n', nomCompSurface, dComp_mm);
     fprintf('Yakın odak lensi  : yüzey %d, focal length = %.6g mm\n', nomNearSurface, fNear_mm);
 
-    %% 2. İlk MC dosyası: afokal kontrol, |EFL|, MC yüzeyleri
-    loadFile(TheSystem, fullfile(folderPath, files(1).name));
-    if ~logical(TheSystem.SystemData.Aperture.AFocalImageSpace)
-        error('%s afokal modda değil. MC dosyaları afokal modda olmalıdır.', files(1).name);
-    end
-    mcUnits1 = unitsPerMm(TheSystem);
-    nMcSurf = TheSystem.LDE.NumberOfSurfaces;
-
-    if isempty(efl_mm)
-        eflRead = abs(TheSystem.MFE.GetOperandValue( ...
-            ZOSAPI.Editors.MFE.MeritOperandType.EFFL, 0, 0, 0, 0, 0, 0, 0, 0)) / mcUnits1;
-        answer = inputdlg({sprintf(['|EFL| (mm) – piksel çevrimi için.\n' ...
-            'İlk MC dosyasından okunan: %.4f mm'], eflRead)}, 'EFL', [1 50], {sprintf('%.4f', eflRead)});
-        if isempty(answer)
-            error('EFL girilmedi.');
-        end
-        efl_mm = str2double(strrep(answer{1}, ',', '.'));
-    end
-    if ~isfinite(efl_mm) || efl_mm <= 0
-        error('Geçersiz |EFL|: %g', efl_mm);
-    end
-
+    %% 2. MC dosyaları: kompanzatör ve |EFL| her dosyada ayrı bulunur
+    fprintf('MC dosyaları      : %d dosya\n', nFiles);
     if isempty(mcCompSurface)
-        isVar = false(nMcSurf, 1);
-        for i = 0:nMcSurf - 1
-            st = string(TheSystem.LDE.GetSurfaceAt(i).ThicknessCell.GetSolveData().Type.ToString());
-            isVar(i + 1) = st == "Variable";
-        end
-        marks = repmat("", nMcSurf, 1);
-        marks(isVar) = "  * variable kalınlık";
-        items = surfaceItems(TheSystem, marks);
-        init = find(isVar, 1);
-        if isempty(init), init = 1; end
-        mcCompSurface = askList(items, ...
-            {sprintf('MC dosyalarında KOMPANZATÖR yüzeyi (gösterilen: %s).', files(1).name), ...
-             '* = kalınlığı variable olan yüzeyler.'}, init, 'MC dosyaları') - 1;
+        fprintf('MC kompanzatör    : her dosyada kalınlığı variable olan yüzey\n');
+    else
+        checkSurface(mcCompSurface, Inf, 'mcCompSurface');
+        fprintf('MC kompanzatör    : yüzey %d (ayardan)\n', mcCompSurface);
     end
-    checkSurface(mcCompSurface, nMcSurf, 'mcCompSurface');
-
     if isempty(mcInsertAfter)
-        items = surfaceItems(TheSystem, repmat("", nMcSurf, 1));
-        items = items(1:end - 1);   % görüntü yüzeyinden sonra eklenemez
-        mcInsertAfter = askList(items, ...
-            {'Yakın odak paraxial yüzeyi hangi yüzeyden SONRA eklensin?', ...
-             'Nominal dosyadakiyle aynı yer seçilmeli (varsayılan: görüntüden önceki son yüzey).'}, ...
-            numel(items), 'MC dosyaları') - 1;
+        fprintf('Paraxial ekleme   : görüntü yüzeyinden hemen önce\n');
+    else
+        checkSurface(mcInsertAfter, Inf, 'mcInsertAfter');
+        fprintf('Paraxial ekleme   : yüzey %d''den sonra (ayardan)\n', mcInsertAfter);
     end
-    checkSurface(mcInsertAfter, nMcSurf - 1, 'mcInsertAfter');
-
-    fprintf('MC dosyaları      : %d dosya, %d yüzey (ilk dosya)\n', nFiles, nMcSurf);
-    fprintf('MC kompanzatör    : yüzey %d\n', mcCompSurface);
-    fprintf('Paraxial ekleme   : yüzey %d''den sonra (yeni yüzey %d)\n', mcInsertAfter, mcInsertAfter + 1);
-    fprintf('|EFL|             : %.4f mm, piksel = %.2f um\n', efl_mm, pixelPitch_um);
+    if isempty(efl_mm)
+        fprintf('|EFL|             : her MC dosyasının kendi EFL''i\n');
+    elseif ~isfinite(efl_mm) || efl_mm <= 0
+        error('Geçersiz efl_mm: %g', efl_mm);
+    else
+        fprintf('|EFL|             : %.4f mm (ayardan)\n', efl_mm);
+    end
+    fprintf('Piksel boyutu     : %.2f um\n', pixelPitch_um);
     fprintf('Encoder hatası    : %s um\n\n', mat2str(compErrors_um));
 
     %% 3. Her MC dosyası için boresight hesabı
-    pixPerTan = efl_mm * 1000 / pixelPitch_um;   % tan θ -> piksel
     checkPrinted = false;
     tStart = tic;
     wb = waitbar(0, 'Boresight hesaplanıyor...', 'Name', 'Boresight Analizi');
@@ -278,16 +300,31 @@ try
             if ~logical(TheSystem.SystemData.Aperture.AFocalImageSpace)
                 error('Dosya afokal modda değil.');
             end
-            if lde.NumberOfSurfaces ~= nMcSurf
-                error('Yüzey sayısı (%d) ilk MC dosyasından (%d) farklı; yüzey numaraları güvenilir değil.', ...
-                    lde.NumberOfSurfaces, nMcSurf);
-            end
 
             u = unitsPerMm(TheSystem);
             wave = primaryWave(TheSystem);
 
+            % Bu dosyanın kompanzatörü ve |EFL|'i
+            if isempty(mcCompSurface)
+                compSurf = findVariableThickness(TheSystem);
+            else
+                compSurf = mcCompSurface;
+            end
+            compSurfUsed(k) = compSurf;
+            if isempty(efl_mm)
+                eflK = abs(TheSystem.MFE.GetOperandValue( ...
+                    ZOSAPI.Editors.MFE.MeritOperandType.EFFL, 0, 0, 0, 0, 0, 0, 0, 0)) / u;
+                if ~isfinite(eflK) || eflK == 0
+                    error('EFL hesaplanamadı.');
+                end
+            else
+                eflK = efl_mm;
+            end
+            eflUsed(k) = eflK;
+            pixPerTan = eflK * 1000 / pixelPitch_um;   % tan θ -> piksel
+
             % a. Sonsuz odak (dosya olduğu gibi)
-            t0 = lde.GetSurfaceAt(mcCompSurface).Thickness;
+            t0 = lde.GetSurfaceAt(compSurf).Thickness;
             compT0(k) = t0 / u;
             b0 = rayTan(TheSystem, lde.NumberOfSurfaces - 1, wave, 0);
             tanInf(k, :) = b0;
@@ -296,9 +333,13 @@ try
             end
 
             % b. Yakın odak: paraxial ekle, kompanzatörü kaydır
-            insIdx = mcInsertAfter + 1;
+            if isempty(mcInsertAfter)
+                insIdx = lde.NumberOfSurfaces - 1;   % görüntüden hemen önce
+            else
+                insIdx = mcInsertAfter + 1;
+            end
             insertParaxial(TheSystem, insIdx, fNear_mm * u);
-            compIdx = mcCompSurface + (insIdx <= mcCompSurface);   % ekleme önceyse numara kayar
+            compIdx = compSurf + (insIdx <= compSurf);   % ekleme önceyse numara kayar
             img = TheSystem.LDE.NumberOfSurfaces - 1;
 
             for lev = 1:nLevels
@@ -464,8 +505,9 @@ if isfile(outputFile)
 end
 writetable(Ozet, outputFile, 'Sheet', 'Ozet');
 
-Dosyalar = table(fileNames, status, compT0, tanInf(:, 1), tanInf(:, 2), ...
-    'VariableNames', {'Dosya', 'Durum', 'Kompanzator_T0_mm', 'Sonsuz_tanThetaX', 'Sonsuz_tanThetaY'});
+Dosyalar = table(fileNames, status, compSurfUsed, compT0, eflUsed, tanInf(:, 1), tanInf(:, 2), ...
+    'VariableNames', {'Dosya', 'Durum', 'Kompanzator_Yuzey', 'Kompanzator_T0_mm', 'EFL_mm', ...
+    'Sonsuz_tanThetaX', 'Sonsuz_tanThetaY'});
 for lev = 1:nLevels
     tag = sprintf('%gum', levelErrors_um(lev));
     Dosyalar.(['dx_piksel_' tag]) = dxPix(:, lev);
@@ -480,18 +522,19 @@ writetable(Dosyalar, outputFile, 'Sheet', 'Dosyalar');
 Ayarlar = table( ...
     ["Klasor"; "Nominal dosya"; "Sonsuz odak config"; "Yakin odak config"; ...
      "Nominal kompanzator yuzeyi"; "Delta komp (mm)"; "Nominal yakin odak paraxial yuzeyi"; ...
-     "Yakin odak focal length (mm)"; "MC kompanzator yuzeyi"; "Paraxial eklendigi yer (bu yuzeyden sonra)"; ...
+     "Yakin odak focal length (mm)"; "MC kompanzator yuzeyi"; "Paraxial eklendigi yer"; ...
      "|EFL| (mm)"; "Piksel (um)"; "Encoder hatalari (um)"; "MC dosya sayisi"; "Gecerli dosya"], ...
     [string(folderPath); string(nominalName); string(infConfig); string(nearConfig); ...
      string(nomCompSurface); sprintf('%.6f', dComp_mm); string(nomNearSurface); ...
-     sprintf('%.6g', fNear_mm); string(mcCompSurface); string(mcInsertAfter); ...
-     sprintf('%.4f', efl_mm); string(pixelPitch_um); string(mat2str(compErrors_um)); ...
-     string(nFiles); string(nValid)], ...
+     sprintf('%.6g', fNear_mm); settingText(mcCompSurface, "her dosyada variable kalinlik"); ...
+     settingText(mcInsertAfter, "goruntuden hemen once"); ...
+     sprintf('%.4f - %.4f', min(eflUsed(valid)), max(eflUsed(valid))); string(pixelPitch_um); ...
+     string(mat2str(compErrors_um)); string(nFiles); string(nValid)], ...
     'VariableNames', {'Ayar', 'Deger'});
 writetable(Ayarlar, outputFile, 'Sheet', 'Ayarlar');
 
 save(fullfile(outFolder, 'Boresight_RawData.mat'), 'fileNames', 'status', 'levelErrors_um', ...
-    'dxPix', 'dyPix', 'magPix', 'appliedSign', 'compT0', 'tanInf', 'dComp_mm', 'fNear_mm', ...
+    'dxPix', 'dyPix', 'magPix', 'appliedSign', 'compT0', 'compSurfUsed', 'eflUsed', 'tanInf', 'dComp_mm', 'fNear_mm', ...
     'efl_mm', 'pixelPitch_um', 'infConfig', 'nearConfig', 'nomCompSurface', 'nomNearSurface', ...
     'mcCompSurface', 'mcInsertAfter', 'nominalName');
 
@@ -518,6 +561,78 @@ for i = 0:n - 1
     if isParaxialType(s)
         f(i + 1) = s.GetSurfaceCell(ZOSAPI.Editors.LDE.SurfaceColumn.Par1).DoubleValue;   % Focal Length
     end
+end
+end
+
+function [thic, ignr] = readMceOperands(TheSystem)
+% MCE'deki THIC ve IGNR satırları: yüzey numarası (Param1) ve her
+% konfigürasyondaki değer.
+mce = TheSystem.MCE;
+nConf = mce.NumberOfConfigurations;
+thic = struct('surf', {}, 'val', {});
+ignr = struct('surf', {}, 'val', {});
+for i = 1:mce.NumberOfOperands
+    op = mce.GetOperandAt(i);
+    typ = upper(strtrim(string(char(op.Type.ToString()))));
+    if typ ~= "THIC" && typ ~= "IGNR"
+        continue;
+    end
+    v = nan(1, nConf);
+    for c = 1:nConf
+        v(c) = cellValue(op.GetOperandCell(c));
+    end
+    r = struct('surf', double(op.Param1), 'val', v);
+    if typ == "THIC"
+        thic(end + 1) = r; %#ok<AGROW>
+    else
+        ignr(end + 1) = r; %#ok<AGROW>
+    end
+end
+end
+
+function v = cellValue(h)
+% Hücre tipi Double, Integer ya da Boolean olabilir: önce metin değerinden oku
+v = NaN;
+try, v = str2double(strrep(char(h.Value), ',', '.')); catch, end
+if isnan(v)
+    try, v = double(h.IntegerValue); catch
+        try, v = h.DoubleValue; catch, end
+    end
+end
+if isnan(v)
+    try
+        txt = lower(strtrim(char(h.Value)));
+        if any(strcmp(txt, {'true', 'on', 'yes'})), v = 1; end
+        if any(strcmp(txt, {'false', 'off', 'no'})), v = 0; end
+    catch
+    end
+end
+end
+
+function surfNo = findVariableThickness(TheSystem)
+% Kalınlığı variable olan tek yüzey: MC dosyasının kompanzatörü
+lde = TheSystem.LDE;
+found = [];
+for i = 0:lde.NumberOfSurfaces - 1
+    solveType = string(lde.GetSurfaceAt(i).ThicknessCell.GetSolveData().Type.ToString());
+    if solveType == "Variable"
+        found(end + 1) = i; %#ok<AGROW>
+    end
+end
+if isempty(found)
+    error('Variable kalınlık yok: kompanzatör bulunamadı (mcCompSurface ayarı ile verilebilir).');
+elseif numel(found) > 1
+    error('%d variable kalınlık var (yüzey %s): tek kompanzatör bekleniyor (mcCompSurface ayarı ile verilebilir).', ...
+        numel(found), mat2str(found));
+end
+surfNo = found;
+end
+
+function s = settingText(value, autoText)
+if isempty(value)
+    s = string(autoText);
+else
+    s = string(value);
 end
 end
 
