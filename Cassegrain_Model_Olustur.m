@@ -4,7 +4,8 @@
 %   alan, boyut sinirlari) ve Cassegrain turunu/turlerini alir. Birinci
 %   derece (paraksiyel) geometriyi ve aynalarin conic sabitlerini formullerle
 %   hesaplar, isterleri kontrol eder, ardindan OpticStudio'da iki aynali
-%   modeli kurar, istenirse optimize eder ve .zmx olarak kaydeder.
+%   modeli formul degerleriyle kurar, isterleri Merit Function Editor'e
+%   operand olarak ekler ve .zmx olarak kaydeder. OPTIMIZASYON YAPILMAZ.
 %   Birden fazla tur secilirse her biri ayri dosyaya kaydedilir ve sonuclar
 %   bir tabloda karsilastirilir.
 %
@@ -13,8 +14,8 @@
 %   2. Tur(ler) secilir: Klasik Cassegrain, Ritchey-Chretien, Dall-Kirkham,
 %      Pressman-Carmichael.
 %   3. Kayit klasoru secilir.
-%   4. Her tur icin: hesap -> kontrol -> LDE kurulumu -> (optimizasyon) ->
-%      sonuc okuma -> kayit.
+%   4. Her tur icin: hesap -> kontrol -> LDE kurulumu -> MFE (isterler +
+%      goruntu kalitesi) -> isterlerin Zemax'ta kontrolu -> kayit.
 %   Ciktilar: <klasor>\Cassegrain_<tur>.zmx, Cassegrain_Sonuclar.xlsx,
 %   Command Window ozeti.
 %
@@ -35,8 +36,8 @@
 %            K1 + 1 = k (m-1)^3 / m^3 * [K2 + ((m+1)/(m-1))^2]
 %            DK: K2 = 0 -> K1 ;  PC: K1 = 0 -> K2
 %   Formuller 3. derece (Seidel) sonuclaridir. Hizli M1'de yuksek dereceden
-%   kuresel aberasyon kalir; bu yuzden conic'ler optimizasyonda serbest
-%   birakilir (Klasik haric: parabol + hiperbol eksende tam kusursuzdur).
+%   kuresel aberasyon kalir; istenirse Zemax'ta elle optimize edilebilir
+%   (Klasik haric: parabol + hiperbol eksende tam kusursuzdur).
 %
 % ZEMAX MODELI (sequential)
 %   0 OBJ   sonsuz
@@ -46,9 +47,22 @@
 %   4 IMA
 %   Aperture: Entrance Pupil Diameter = D. Alanlar: 0, 0.7, 1.0 x yari alan.
 %   Ray aiming: Real.
-%   Optimizasyon degiskenleri: goruntu mesafesi + turun serbest conic'leri.
-%   R1, R2, d sabit kalir, boylece EFL ve obscuration birinci derecede korunur.
-%   Merit: RMS wavefront, centroid, Gaussian quadrature, obscuration orani ile.
+%   Degisken (V) isaretleri hazir birakilir ama optimizasyon calistirilmaz:
+%   goruntu mesafesi + turun serbest conic'leri (RC: K1,K2; DK: K1; PC: K2).
+%
+% MERIT FUNCTION (isterlerden)
+%   BLNK  ISTERLER
+%   EFFL  hedef = EFL                                   (agirlik 1)
+%   WFNO  hedef = F#                                    (izleme, agirlik 0)
+%   REAY  M2'de tam alan ust/alt marjinal isin yuksekligi
+%   ABSO, MAXX  -> M2 isin izi yaricapi
+%   OPLT  M2 izi <= maks_obscuration * D/2 - baffle payi (agirlik 1)
+%   CTGT  M2 -> goruntu >= d + e   (back focus, dedektor yeri)
+%   CTLT  M2 -> goruntu <= maks uzunluk - ek uzunluk payi
+%   BLNK  GORUNTU KALITESI
+%   Optimization Wizard: RMS wavefront, centroid, 4 halka, obscuration orani.
+%   Script MFE'yi bir kez hesaplatir ve her isteri SAGLANIYOR / ASILIYOR
+%   olarak raporlar.
 %
 % NOTLAR
 %   - Raporlanan RMS WFE / spot degerleri RWCE / RSCE operandlarindandir
@@ -71,11 +85,9 @@ prompt = { ...
     'Maks. cap (mm):', ...
     'Maks. uzunluk (mm):', ...
     'M2 baffle / tutucu radyal payi (mm):', ...
-    'Ek uzunluk payi: M2 arkasi + dedektor + M1 kalinligi (mm):', ...
-    'Optimizasyon yapilsin mi? (1 = evet, 0 = hayir):', ...
-    'Optimizasyon cekirdek sayisi:'};
+    'Ek uzunluk payi: M2 arkasi + dedektor + M1 kalinligi (mm):'};
 varsayilan = {'400', '2.3', '0.30', '0.27', '20', '0.632', '0.5', ...
-              '180', '160', '1', '15', '1', '8'};
+              '180', '160', '1', '15'};
 cevap = inputdlg(prompt, 'Cassegrain isterleri', [1 70], varsayilan);
 if isempty(cevap), return; end
 v = str2double(cevap);
@@ -92,8 +104,6 @@ ist.Dmax     = v(8);
 ist.Lmax     = v(9);
 ist.bafflePay = v(10);
 ist.ekUzunluk = v(11);
-ist.optimize = v(12) ~= 0;
-ist.cekirdek = max(1, round(v(13)));
 
 if ist.f <= 0 || ist.Fno <= 0, error('EFL ve F# pozitif olmali.'); end
 if ist.k <= 0 || ist.k >= 1,   error('k 0 ile 1 arasinda olmali.'); end
@@ -134,15 +144,12 @@ for s = secim
         warning('Zemax EFL hedeften %%0.1''den fazla farkli. Model kontrol edilmeli.');
     end
 
-    if ist.optimize
-        meritKur(TheSystem, ist, g);
-        mf0 = TheSystem.MFE.CalculateMeritFunction();
-        optimizeEt(TheSystem, ist.cekirdek);
-        mf1 = TheSystem.MFE.CalculateMeritFunction();
-        fprintf('Merit: %.6f -> %.6f\n', mf0, mf1);
-    end
+    satir = meritKur(TheSystem, ist, g);
+    mf = TheSystem.MFE.CalculateMeritFunction();
+    fprintf('Merit function degeri (optimizasyonsuz): %.6f\n', mf);
 
     r = sonucOku(TheSystem, ist, g);
+    r = isterKontrol(TheSystem, ist, g, satir, r);
     r.Tur = string(turAdlari{s});
     r.K1_formul = K1;  r.K2_formul = K2;
 
@@ -159,7 +166,8 @@ TheApplication.CloseApplication();
 %% ===================== KARSILASTIRMA =====================
 T = struct2table(sonuc);
 T = T(:, {'Tur', 'K1_formul', 'K2_formul', 'K1', 'K2', 'EFL_mm', 'WFNO', ...
-          'GoruntuMesafesi_mm', 'e_mm', ...
+          'GoruntuMesafesi_mm', 'e_mm', 'Obscuration_Zemax', 'Uzunluk_mm', ...
+          'EFL_ok', 'Obscuration_ok', 'BackFocus_ok', 'Uzunluk_ok', ...
           'WFE0_dalga', 'WFE07_dalga', 'WFE1_dalga', ...
           'Spot0_um', 'Spot07_um', 'Spot1_um', 'Dosya'});
 
@@ -328,7 +336,7 @@ function modelKur(TheSystem, ist, g, K1, K2, tur, turAdi)
     s3.Conic = K2;
     aciklikAyarla(s3, 'acik', 0, g.DM2 / 2 + 0.5);
 
-    % Optimizasyon degiskenleri
+    % Degisken isaretleri (optimizasyon calistirilmaz, Zemax'ta elle yapilabilir)
     s3.ThicknessCell.MakeSolveVariable();          % goruntu mesafesi (odak)
     switch tur
         case 'RC'
@@ -378,8 +386,11 @@ function aciklikAyarla(surf, tip, rMin, rMax)
     AD.ChangeApertureTypeSettings(ayar);
 end
 
-function meritKur(TheSystem, ist, g)
+function satir = meritKur(TheSystem, ist, g)
     MFE = TheSystem.MFE;
+    T = ZOSAPI.Editors.MFE.MeritOperandType;
+
+    % 1) Goruntu kalitesi: Optimization Wizard (MFE'yi bastan kurar)
     kuruldu = false;
     try
         w = MFE.SEQOptimizationWizard;
@@ -400,34 +411,94 @@ function meritKur(TheSystem, ist, g)
     catch
     end
     if ~kuruldu
-        % Yedek: her alan icin RMS wavefront (centroid) operandi
-        warning('Optimization Wizard kullanilamadi, RWCE operandlari ile merit kuruluyor.');
+        warning('Optimization Wizard kullanilamadi, her alan icin RWCE operandi ekleniyor.');
         hy = [0 0.7 1];
         if ist.theta == 0, hy = 0; end
         for i = 1:numel(hy)
             op = MFE.AddOperand();
-            op.ChangeType(ZOSAPI.Editors.MFE.MeritOperandType.RWCE);
-            op.GetOperandCell(ZOSAPI.Editors.MFE.MeritColumn.Param1).IntegerValue = 6;
-            op.GetOperandCell(ZOSAPI.Editors.MFE.MeritColumn.Param2).IntegerValue = 1;
-            op.GetOperandCell(ZOSAPI.Editors.MFE.MeritColumn.Param4).DoubleValue = hy(i);
-            op.Target = 0;
-            op.Weight = 1;
+            op.ChangeType(T.RWCE);
+            prm(op, 1, 6); prm(op, 2, 1); prm(op, 4, hy(i));
+            op.Target = 0;  op.Weight = 1;
         end
     end
-    % EFL izleme satiri (agirlik 0; R1, R2, d sabit oldugundan EFL degismez)
-    op = MFE.InsertNewOperandAt(1);
-    op.ChangeType(ZOSAPI.Editors.MFE.MeritOperandType.EFFL);
-    op.Target = ist.f;
-    op.Weight = 0;
+
+    % 2) Isterler: en uste, sirayla eklenir (satir numaralari sabit)
+    n = 0;
+    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.BLNK); yorum(op, 'ISTERLER');
+    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.EFFL);
+        prm(op, 2, 1); op.Target = ist.f; op.Weight = 1; satir.EFFL = n;
+    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.WFNO);
+        op.Target = ist.Fno; op.Weight = 0; satir.WFNO = n;
+    % M2 isin izi: tam alan, ust ve alt marjinal isin
+    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.REAY);
+        prm(op, 1, 3); prm(op, 2, 1); prm(op, 4, 1); prm(op, 6, 1);  op.Weight = 0; rU = n;
+    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.REAY);
+        prm(op, 1, 3); prm(op, 2, 1); prm(op, 4, 1); prm(op, 6, -1); op.Weight = 0; rA = n;
+    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.ABSO);
+        prm(op, 1, rU); op.Weight = 0; aU = n;
+    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.ABSO);
+        prm(op, 1, rA); op.Weight = 0; aA = n;
+    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.MAXX);
+        prm(op, 1, aU); prm(op, 2, aA); op.Weight = 0; satir.M2iz = n;
+    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.OPLT);
+        prm(op, 1, satir.M2iz); op.Target = ist.kMax * g.D / 2 - ist.bafflePay; op.Weight = 1;
+        satir.OPLTobs = n;
+    % Back focus ve uzunluk (M2 -> goruntu kalinligi, yuzey 3)
+    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.CTGT);
+        prm(op, 1, 3); op.Target = g.d + ist.e; op.Weight = 1; satir.CTGT = n;
+    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.CTLT);
+        prm(op, 1, 3); op.Target = ist.Lmax - ist.ekUzunluk; op.Weight = 1; satir.CTLT = n;
+    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.BLNK); yorum(op, 'GORUNTU KALITESI');
 end
 
-function optimizeEt(TheSystem, cekirdek)
-    opt = TheSystem.Tools.OpenLocalOptimization();
-    opt.Algorithm = ZOSAPI.Tools.Optimization.OptimizationAlgorithm.DampedLeastSquares;
-    opt.Cycles = ZOSAPI.Tools.Optimization.OptimizationCycles.Automatic;
-    opt.NumberOfCores = cekirdek;
-    opt.RunAndWaitForCompletion();
-    opt.Close();
+function prm(op, k, val)
+    % Param k hucresine deger yazar (tam sayi ya da ondalik, hucre tipine gore)
+    cols = {'Param1', 'Param2', 'Param3', 'Param4', 'Param5', 'Param6', 'Param7', 'Param8'};
+    c = op.GetOperandCell(ZOSAPI.Editors.MFE.MeritColumn.(cols{k}));
+    tamSayi = false;
+    try, tamSayi = contains(lower(char(c.DataType.ToString())), 'int'); catch, end
+    if tamSayi
+        c.IntegerValue = int32(val);
+    else
+        try
+            c.DoubleValue = val;
+        catch
+            c.IntegerValue = int32(val);
+        end
+    end
+end
+
+function yorum(op, metin)
+    try
+        op.GetOperandCell(ZOSAPI.Editors.MFE.MeritColumn.Comment).Value = metin;
+    catch
+    end
+end
+
+function r = isterKontrol(TheSystem, ist, g, satir, r)
+    MFE = TheSystem.MFE;
+    deger = @(n) MFE.GetOperandAt(n).Value;
+    efl  = deger(satir.EFFL);
+    wfno = deger(satir.WFNO);
+    iz   = deger(satir.M2iz);
+    b    = TheSystem.LDE.GetSurfaceAt(3).Thickness;
+    r.Obscuration_Zemax = (iz + ist.bafflePay) / (g.D / 2);
+    r.Uzunluk_mm = b + ist.ekUzunluk;
+    r.EFL_ok        = abs(abs(efl) - ist.f) <= 1e-3 * ist.f;
+    r.Obscuration_ok = r.Obscuration_Zemax <= ist.kMax;
+    r.BackFocus_ok  = b - g.d >= ist.e - 1e-6;
+    r.Uzunluk_ok    = r.Uzunluk_mm <= ist.Lmax;
+    fprintf('--- Isterler (Zemax MFE) ---\n');
+    fprintf('EFL          : %9.4f mm  (hedef %.4f)          %s\n', efl, ist.f, durum(r.EFL_ok));
+    fprintf('Calisma F#   : %9.4f     (hedef %.4f)          izleme\n', wfno, ist.Fno);
+    fprintf('Obscuration  : %9.4f     (M2 izi %.3f + baffle %.2f mm, maks %.3f)  %s\n', ...
+        r.Obscuration_Zemax, iz, ist.bafflePay, ist.kMax, durum(r.Obscuration_ok));
+    fprintf('Back focus e : %9.4f mm  (min %.4f)            %s\n', b - g.d, ist.e, durum(r.BackFocus_ok));
+    fprintf('Uzunluk      : %9.4f mm  (maks %.4f)           %s\n', r.Uzunluk_mm, ist.Lmax, durum(r.Uzunluk_ok));
+end
+
+function t = durum(ok)
+    if ok, t = 'SAGLANIYOR'; else, t = 'ASILIYOR'; end
 end
 
 function r = sonucOku(TheSystem, ist, g)
