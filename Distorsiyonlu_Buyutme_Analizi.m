@@ -774,7 +774,6 @@ function [fEff, yH, tH] = fieldEfl(TheSystem, normFields, isAfocal, efl0)
 %     object space (direction cosines at surface 0).
 %   Afocal (object = OLED): height on the object surface, angle in image space.
 % At h = 0 the paraxial EFL efl0 is used.
-op = ZOSAPI.Editors.MFE.MeritOperandType;
 imgSurf = TheSystem.LDE.NumberOfSurfaces - 1;
 wave = primaryWave(TheSystem);
 nF = numel(normFields);
@@ -796,9 +795,9 @@ for f = 1:nF
         fEff(f) = efl0;
         continue;
     end
-    y = TheSystem.MFE.GetOperandValue(op.REAY, hSurf, wave, 0, h, 0, 0, 0, 0);
-    m = TheSystem.MFE.GetOperandValue(op.REAM, aSurf, wave, 0, h, 0, 0, 0, 0);
-    n = TheSystem.MFE.GetOperandValue(op.REAN, aSurf, wave, 0, h, 0, 0, 0, 0);
+    y = TheSystem.MFE.GetOperandValue(ZOSAPI.Editors.MFE.MeritOperandType.REAY, hSurf, wave, 0, h, 0, 0, 0, 0);
+    m = TheSystem.MFE.GetOperandValue(ZOSAPI.Editors.MFE.MeritOperandType.REAM, aSurf, wave, 0, h, 0, 0, 0, 0);
+    n = TheSystem.MFE.GetOperandValue(ZOSAPI.Editors.MFE.MeritOperandType.REAN, aSurf, wave, 0, h, 0, 0, 0, 0);
     yH(f) = abs(y);
     tH(f) = abs(m / n);
     if yH(f) > 0 && tH(f) > 0 && isfinite(yH(f)) && isfinite(tH(f))
