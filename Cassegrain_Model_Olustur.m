@@ -388,7 +388,6 @@ end
 
 function satir = meritKur(TheSystem, ist, g)
     MFE = TheSystem.MFE;
-    T = ZOSAPI.Editors.MFE.MeritOperandType;
 
     % 1) Goruntu kalitesi: Optimization Wizard (MFE'yi bastan kurar)
     kuruldu = false;
@@ -416,7 +415,7 @@ function satir = meritKur(TheSystem, ist, g)
         if ist.theta == 0, hy = 0; end
         for i = 1:numel(hy)
             op = MFE.AddOperand();
-            op.ChangeType(T.RWCE);
+            tipAyarla(op, 'RWCE');
             prm(op, 1, 6); prm(op, 2, 1); prm(op, 4, hy(i));
             op.Target = 0;  op.Weight = 1;
         end
@@ -424,31 +423,41 @@ function satir = meritKur(TheSystem, ist, g)
 
     % 2) Isterler: en uste, sirayla eklenir (satir numaralari sabit)
     n = 0;
-    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.BLNK); yorum(op, 'ISTERLER');
-    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.EFFL);
+    n = n + 1; op = MFE.InsertNewOperandAt(n); yorum(op, 'ISTERLER');
+    n = n + 1; op = MFE.InsertNewOperandAt(n); tipAyarla(op, 'EFFL');
         prm(op, 2, 1); op.Target = ist.f; op.Weight = 1; satir.EFFL = n;
-    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.WFNO);
+    n = n + 1; op = MFE.InsertNewOperandAt(n); tipAyarla(op, 'WFNO');
         op.Target = ist.Fno; op.Weight = 0; satir.WFNO = n;
     % M2 isin izi: tam alan, ust ve alt marjinal isin
-    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.REAY);
+    n = n + 1; op = MFE.InsertNewOperandAt(n); tipAyarla(op, 'REAY');
         prm(op, 1, 3); prm(op, 2, 1); prm(op, 4, 1); prm(op, 6, 1);  op.Weight = 0; rU = n;
-    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.REAY);
+    n = n + 1; op = MFE.InsertNewOperandAt(n); tipAyarla(op, 'REAY');
         prm(op, 1, 3); prm(op, 2, 1); prm(op, 4, 1); prm(op, 6, -1); op.Weight = 0; rA = n;
-    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.ABSO);
+    n = n + 1; op = MFE.InsertNewOperandAt(n); tipAyarla(op, 'ABSO');
         prm(op, 1, rU); op.Weight = 0; aU = n;
-    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.ABSO);
+    n = n + 1; op = MFE.InsertNewOperandAt(n); tipAyarla(op, 'ABSO');
         prm(op, 1, rA); op.Weight = 0; aA = n;
-    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.MAXX);
+    n = n + 1; op = MFE.InsertNewOperandAt(n); tipAyarla(op, 'MAXX');
         prm(op, 1, aU); prm(op, 2, aA); op.Weight = 0; satir.M2iz = n;
-    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.OPLT);
+    n = n + 1; op = MFE.InsertNewOperandAt(n); tipAyarla(op, 'OPLT');
         prm(op, 1, satir.M2iz); op.Target = ist.kMax * g.D / 2 - ist.bafflePay; op.Weight = 1;
         satir.OPLTobs = n;
     % Back focus ve uzunluk (M2 -> goruntu kalinligi, yuzey 3)
-    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.CTGT);
+    n = n + 1; op = MFE.InsertNewOperandAt(n); tipAyarla(op, 'CTGT');
         prm(op, 1, 3); op.Target = g.d + ist.e; op.Weight = 1; satir.CTGT = n;
-    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.CTLT);
+    n = n + 1; op = MFE.InsertNewOperandAt(n); tipAyarla(op, 'CTLT');
         prm(op, 1, 3); op.Target = ist.Lmax - ist.ekUzunluk; op.Weight = 1; satir.CTLT = n;
-    n = n + 1; op = MFE.InsertNewOperandAt(n); op.ChangeType(T.BLNK); yorum(op, 'GORUNTU KALITESI');
+    n = n + 1; op = MFE.InsertNewOperandAt(n); yorum(op, 'GORUNTU KALITESI');
+end
+
+function tipAyarla(op, ad)
+    % Operand tipini adiyla ayarlar; ZOS-API'de yoksa anlasilir hata verir
+    try
+        tip = ZOSAPI.Editors.MFE.MeritOperandType.(ad);
+    catch
+        error('ZOS-API bu surumde "%s" operandini tanimiyor.', ad);
+    end
+    op.ChangeType(tip);
 end
 
 function prm(op, k, val)
