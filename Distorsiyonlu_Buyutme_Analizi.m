@@ -23,10 +23,10 @@
 %          dalga boyu) yüksekliği ve açısı, buradan etkin EFL:
 %              f_eff(h) = |y(h)| / |tan θ(h)|      (h = 0 için paraksiyel EFL)
 %          Dosya afokal modda değilse (nesne sonsuzda, görüntü düzlemde):
-%              y = görüntü yüzeyinde REAY, tan θ = nesne uzayında REAM / REAN
+%              y = görüntü yüzeyinde REAY, tan θ = nesne uzayında REAB / REAC
 %              (yüzey 0'daki doğrultu kosinüsleri)
 %          Dosya afokal moddaysa (nesne = OLED, çıkış açısal):
-%              y = nesne yüzeyinde REAY, tan θ = görüntü uzayında REAM / REAN
+%              y = nesne yüzeyinde REAY, tan θ = görüntü uzayında REAB / REAC
 %        - Distorsiyon: D(h) = f_eff(h) / EFL_paraksiyel − 1  (F-Tan(θ)
 %          distorsiyonu; Zemax'in Field Curvature / Distortion grafiğiyle
 %          karşılaştırılabilir)
@@ -483,8 +483,8 @@ end
 
 n1Name = char(sys(1).name);
 n2Name = char(sys(2).name);
-modeText = ["nesne sonsuzda: y = görüntüde REAY, açı = nesne uzayında REAM/REAN", ...
-            "afokal: y = nesnede (OLED) REAY, açı = görüntü uzayında REAM/REAN"];
+modeText = ["nesne sonsuzda: y = görüntüde REAY, açı = nesne uzayında REAB/REAC", ...
+            "afokal: y = nesnede (OLED) REAY, açı = görüntü uzayında REAB/REAC"];
 
 % --- Page: summary -------------------------------------------------------
 summaryLines = {
@@ -585,8 +585,8 @@ method = {
     'ADIM 1 – ETKİN EFL'
     sprintf(['Her MC dosyasında normalize alanlarda (%s) birincil dalga boyunda gerçek ana ışın izlenir ve ' ...
      'f_eff(h) = |y| / |tan θ| hesaplanır. Nesnesi sonsuzda olan dosyada (afokal değil) y görüntü yüzeyinde ' ...
-     'REAY, tan θ nesne uzayında REAM / REAN''dır. Afokal dosyada (nesne = OLED) y nesne yüzeyinde REAY, tan θ ' ...
-     'görüntü uzayında REAM / REAN''dır. On-axis''te (h = 0) paraksiyel EFL (EFFL) kullanılır. Distorsiyon ' ...
+     'REAY, tan θ nesne uzayında REAB / REAC''dır. Afokal dosyada (nesne = OLED) y nesne yüzeyinde REAY, tan θ ' ...
+     'görüntü uzayında REAB / REAC''dır. On-axis''te (h = 0) paraksiyel EFL (EFFL) kullanılır. Distorsiyon ' ...
      'D(h) = f_eff(h) / EFL − 1''dir.'], strjoin(fieldNames, ', '))
     ''
     'ADIM 2 – YIELD KÜMELERİ'
@@ -796,8 +796,8 @@ for f = 1:nF
         continue;
     end
     y = TheSystem.MFE.GetOperandValue(ZOSAPI.Editors.MFE.MeritOperandType.REAY, hSurf, wave, 0, h, 0, 0, 0, 0);
-    m = TheSystem.MFE.GetOperandValue(ZOSAPI.Editors.MFE.MeritOperandType.REAM, aSurf, wave, 0, h, 0, 0, 0, 0);
-    n = TheSystem.MFE.GetOperandValue(ZOSAPI.Editors.MFE.MeritOperandType.REAN, aSurf, wave, 0, h, 0, 0, 0, 0);
+    m = TheSystem.MFE.GetOperandValue(ZOSAPI.Editors.MFE.MeritOperandType.REAB, aSurf, wave, 0, h, 0, 0, 0, 0);
+    n = TheSystem.MFE.GetOperandValue(ZOSAPI.Editors.MFE.MeritOperandType.REAC, aSurf, wave, 0, h, 0, 0, 0, 0);
     yH(f) = abs(y);
     tH(f) = abs(m / n);
     if yH(f) > 0 && tH(f) > 0 && isfinite(yH(f)) && isfinite(tH(f))
