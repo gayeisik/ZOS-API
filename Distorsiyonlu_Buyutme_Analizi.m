@@ -5,10 +5,11 @@
 %   alanının birkaç noktasında (normFields, örn. 0, 0.5, 0.7, 1 normalize alan)
 %   hesaplar. Her sistemde MTF'e göre %yieldPct yield kümesine giren dosyalar
 %   seçilir; 1. sistemin yield kümesindeki her dosya 2. sistemin yield
-%   kümesindeki her dosyayla eşleştirilir (n1 x n2 çift). Bir çift ancak TÜM
-%   alanlarda büyütme isterini (magTarget ± magTol) sağlarsa geçer.
-%   Merkez alan (0) paraksiyel EFL ile hesaplanır; distorsiyonsuz önceki
-%   analizle (Iki_Sistem_Buyutme_Analizi.m) aynı sonucu verir.
+%   kümesindeki her dosyayla eşleştirilir (n1 x n2 çift). Her çiftin on-axis
+%   (0) ve off-axis alanlardaki büyütmesi hesaplanır ve alan bazında büyütme
+%   değerleri / dağılımları verilir. Geçti / kaldı değerlendirmesi yapılmaz.
+%   On-axis (0) paraksiyel EFL ile hesaplanır; distorsiyonsuz önceki
+%   analizle (Iki_Sistem_Buyutme_Analizi.m) aynı büyütmeyi verir.
 %   Başka bir scriptin çıktısı kullanılmaz; her şey bu scriptte OpticStudio
 %   ile hesaplanır.
 %
@@ -45,25 +46,27 @@
 %                                        = c × f_1,eff(h) / f_2(y_OLED)
 %   Yaklaşık olarak M(h) ≈ M(0) × (1 + D_1(h) − D_2), yani kenar alanda
 %   büyütme iki sistemin distorsiyon farkı kadar değişir.
-%   Geçme koşulu: tüm alanlarda |M(h) − magTarget| <= magTol (her tolerans
-%   için ayrı). Alan bazında geçme oranları da verilir.
+%   Off-axis büyütme değişimi:      ΔM(h) = M(h) / M(0) − 1  (çift başına, %)
+%   Her alan için: nominal çiftin M'si; tüm çiftlerin M ortalaması, std,
+%   min, max ve yüzdelikleri; ΔM'nin aynı istatistikleri.
 %
 % AYARLAR (User settings)
 %   sysName, pixelPitch_um, nPixels, pixelScale, filePrefix, yieldPct,
-%   mtfFreqFrac, mtfFields, normFields, magTarget, magTol, writePairsSheet,
-%   nHistBins
+%   mtfFreqFrac, mtfFields, normFields, magTarget (yalnız referans çizgisi),
+%   writePairsSheet, nHistBins
 %
 % ÇIKTILAR (1. sistemin klasöründe "BÜYÜTME-DİSTORSİYON ANALİZİ - %90 YIELD")
 %   Distortion_by_Field.png      : iki sistemin alana göre distorsiyonu
 %                                  (nominal, yield kümesi ortalaması ve aralığı)
 %   Magnification_by_Field.png   : alana göre büyütme (ortalama, %1-%99, min-max)
-%   PassRate_by_Field.png        : alan bazında ve tüm alanlarda geçme oranı
+%   Magnification_Change.png     : on-axis'e göre büyütme değişimi ΔM(h)
 %   Magnification_Histograms.png : her alanın büyütme dağılımı
 %   *.fig                        : grafiklerin düzenlenebilir MATLAB dosyaları
-%   Distortion_Magnification_Results.xlsx : "Summary", "By Tolerance",
-%                                  "Field Stats", "Distortion", sistem başına
-%                                  dosya tabloları, "Pairs", "Settings"
-%   Distortion_Magnification_Report.pdf : A4 rapor; özet, sonuç, yöntem,
+%   Distortion_Magnification_Results.xlsx : "Summary", "Field Stats",
+%                                  "Percentiles", "Distortion", sistem başına
+%                                  dosya tabloları, "Pairs" (her çiftin her
+%                                  alandaki M'si), "Settings"
+%   Distortion_Magnification_Report.pdf : A4 rapor; özet, değerlendirme, yöntem,
 %                                  grafikler ve nasıl yorumlanacakları
 %   Distortion_Magnification_Data.mat : tüm ham veriler
 %   Analysis_Summary.txt, Analysis_Log.txt
@@ -90,18 +93,12 @@ yieldPct        = 90;                % yield level (%): best yieldPct % of each 
 mtfFreqFrac     = 0.5;               % MTF criterion frequency as a fraction of each system's Nyquist
 mtfFields       = {[], []};          % fields used for the MTF criterion per system; [] = all fields
 normFields      = [0 0.5 0.7 1];     % normalized fields (Hy) of system 1 where M is evaluated
-magTarget       = 1.00;              % required magnification
-magTol          = [0.01 0.03];       % allowed deviation(s): |M - magTarget| <= magTol; one or more values
+magTarget       = 1.00;              % target magnification (drawn as a reference line only)
 writePairsSheet = true;              % write every pair to the "Pairs" sheet (Excel limit 1048575 rows)
 nHistBins       = 60;                % histogram bins
 % FFT MTF sample size is set in computeFileMtf (S_64x64 by default)
 
 magConst = pixelScale * pixelPitch_um(2) / pixelPitch_um(1);   % c: OLED height = c * detector height
-magTol   = unique(abs(magTol(:)).');      % tightest tolerance first
-nTol     = numel(magTol);
-if nTol == 0 || any(magTol == 0)
-    error('magTol must contain one or more positive values.');
-end
 normFields = unique([0, abs(normFields(:)).']);   % the center (0) is always included
 if any(normFields > 1)
     error('normFields must be between 0 and 1.');
@@ -232,58 +229,37 @@ if max(fitErr2) > 1e-3 * median(E2)
     warning('f_2(y) fit error up to %.4f mm (relative %.2e).', max(fitErr2), max(fitErr2) / median(E2));
 end
 
-%% Statistics
-dev = abs(M - magTarget);
-worstDev = max(dev, [], 3);                          % n1 x n2, worst field of each pair
-pctLevels = [1 99] / 100;
-fieldStats = zeros(nF, 8);                            % mean std min max P1 P99 nominalM nominalChange
+%% Statistics of the magnification at every field
+dM = 100 * (M ./ M(:, :, 1) - 1);                    % change from on-axis (%), n1 x n2 x nF
+pctLevels = [1 5 50 95 99];
+nP = numel(pctLevels);
+fieldStats = zeros(nF, 4);                            % M: mean std min max
+fieldPct = zeros(nF, nP);                             % M percentiles
+changeStats = zeros(nF, 4);                           % dM (%): mean std min max
+changePct = zeros(nF, 2);                             % dM (%): P1 P99
 for f = 1:nF
     mf = M(:, :, f);
     mf = mf(:);
-    q = quantileSorted(sort(mf), pctLevels);
-    fieldStats(f, :) = [mean(mf), std(mf), min(mf), max(mf), q(1), q(2), mNomField(f), dDistNom(f)];
+    df = dM(:, :, f);
+    df = df(:);
+    fieldStats(f, :) = [mean(mf), std(mf), min(mf), max(mf)];
+    fieldPct(f, :) = quantileSorted(sort(mf), pctLevels / 100);
+    changeStats(f, :) = [mean(df), std(df), min(df), max(df)];
+    changePct(f, :) = quantileSorted(sort(df), [1 99] / 100);
 end
-
-% Contribution of the edge distortion: change of mean M from center to edge
 meanShiftEdge = fieldStats(end, 1) - fieldStats(1, 1);
 stdIncreaseEdge = fieldStats(end, 2) - fieldStats(1, 2);
 
-for t = nTol:-1:1
-    R = struct();
-    R.tol  = magTol(t);
-    R.low  = magTarget - magTol(t);
-    R.high = magTarget + magTol(t);
-    passF = dev <= magTol(t) + 1e-12;                % n1 x n2 x nF
-    R.passAll = all(passF, 3);
-    R.passFieldPct = 100 * squeeze(mean(mean(passF, 1), 2)).';     % 1 x nF
-    R.passAllPct = 100 * mean(R.passAll(:));
-    R.passCenterPct = R.passFieldPct(1);
-    R.lossPct = R.passCenterPct - R.passAllPct;
-    [~, R.worstField] = min(R.passFieldPct);
-    R.below = 100 * squeeze(mean(mean(M < R.low - 1e-12, 1), 2)).';
-    R.above = 100 * squeeze(mean(mean(M > R.high + 1e-12, 1), 2)).';
-    R.passRate1 = 100 * mean(R.passAll, 2);          % each system 1 file vs all system 2 files
-    R.passRate2 = 100 * mean(R.passAll, 1).';
-    res(t) = R; %#ok<SAGROW>
-end
-
 %% Command window summary
-fprintf('\n===== MAGNIFICATION WITH DISTORTION =====\n');
+fprintf('\n===== MAGNIFICATION BY FIELD (%g %% MTF yield sets) =====\n', yieldPct);
 fprintf('c = k x p2 / p1 = %g x %g / %g = %.6f;  pairs: %d x %d = %d\n', ...
     pixelScale, pixelPitch_um(2), pixelPitch_um(1), magConst, n1, n2, nPairs);
-fprintf('%-8s %10s %10s %10s %10s %10s %10s %10s\n', 'Field', 'Nominal M', 'Mean M', 'Std M', ...
-    'Min M', 'Max M', 'D_MWIR %', 'D_OLED %');
+fprintf('%-6s %10s %10s %9s %10s %10s %10s %10s %10s %10s\n', 'Field', 'Nominal M', 'Mean M', 'Std M', ...
+    'Min M', 'Max M', 'dM mean %', 'dM min %', 'dM max %', 'Nom. dM %');
 for f = 1:nF
-    fprintf('%-8s %10.5f %10.5f %10.5f %10.5f %10.5f %+10.3f %+10.3f\n', fieldNames(f), mNomField(f), ...
-        fieldStats(f, 1), fieldStats(f, 2), fieldStats(f, 3), fieldStats(f, 4), ...
-        100 * sys(1).nominal.D(f), 100 * sys(2).nominal.D(f));
-end
-for t = 1:nTol
-    R = res(t);
-    fprintf('\n--- M = %.4f +/- %g ---\n', magTarget, R.tol);
-    fprintf('Pass by field: %s\n', strjoin(compose("%s: %.2f %%", fieldNames(:), R.passFieldPct(:)).', ', '));
-    fprintf('Pass at ALL fields: %.2f %%  (center only: %.2f %%, loss from distortion: %.2f points)\n', ...
-        R.passAllPct, R.passCenterPct, R.lossPct);
+    fprintf('%-6s %10.5f %10.5f %9.5f %10.5f %10.5f %+10.3f %+10.3f %+10.3f %+10.3f\n', fieldNames(f), ...
+        mNomField(f), fieldStats(f, 1), fieldStats(f, 2), fieldStats(f, 3), fieldStats(f, 4), ...
+        changeStats(f, 1), changeStats(f, 3), changeStats(f, 4), 100 * dDistNom(f));
 end
 
 %% Output folder: "BÜYÜTME-DİSTORSİYON ANALİZİ - %90 YIELD" in the system 1 folder
@@ -295,10 +271,8 @@ if ~isfolder(outFolder)
 end
 
 colBlue = [0 0.45 0.74];
-colFail = [0.85 0.33 0.10];
-tolPalette = [0.10 0.50 0.10; 0.55 0.75 0.20; 0.93 0.69 0.13; 0.49 0.18 0.56; 0.30 0.75 0.93];
-tolColors = tolPalette(mod(0:nTol - 1, size(tolPalette, 1)) + 1, :);
 fieldColors = lines(nF);
+fieldLabel = sprintf('Normalized field of %s (0 = on-axis)', sys(1).name);
 
 %% Figure 1: distortion by field
 fig1 = figure('Name', 'Distortion by Field', 'Color', 'w', 'Position', [100 100 950 700]);
@@ -325,80 +299,65 @@ saveFigure(fig1, fullfile(outFolder, 'Distortion_by_Field.png'));
 %% Figure 2: magnification by field
 fig2 = figure('Name', 'Magnification by Field', 'Color', 'w', 'Position', [120 120 950 560]);
 hold on;
-for t = nTol:-1:1
-    patch([0 1 1 0], [res(t).low res(t).low res(t).high res(t).high], tolColors(t, :), 'FaceAlpha', 0.12, ...
-        'EdgeColor', tolColors(t, :), 'LineStyle', '--', ...
-        'DisplayName', sprintf('%.2f \\pm %g (all fields: %.1f%% pass)', magTarget, res(t).tol, res(t).passAllPct));
-end
 fill([normFields, fliplr(normFields)], [fieldStats(:, 3).', fliplr(fieldStats(:, 4).')], colBlue, ...
     'FaceAlpha', 0.12, 'EdgeColor', 'none', 'DisplayName', 'All pairs min – max');
-fill([normFields, fliplr(normFields)], [fieldStats(:, 5).', fliplr(fieldStats(:, 6).')], colBlue, ...
+fill([normFields, fliplr(normFields)], [fieldPct(:, 1).', fliplr(fieldPct(:, end).')], colBlue, ...
     'FaceAlpha', 0.30, 'EdgeColor', 'none', 'DisplayName', 'All pairs 1 % – 99 %');
 plot(normFields, fieldStats(:, 1), '-o', 'Color', colBlue, 'LineWidth', 1.6, 'MarkerFaceColor', colBlue, ...
     'DisplayName', 'Mean of all pairs');
 plot(normFields, mNomField, '--sk', 'LineWidth', 1.3, 'DisplayName', 'Nominal pair');
+yline(magTarget, ':k', sprintf('M = %.2f', magTarget), 'LineWidth', 1, 'HandleVisibility', 'off');
+for f = 1:nF
+    text(normFields(f), fieldStats(f, 4), sprintf('%.4f', fieldStats(f, 1)), 'HorizontalAlignment', 'center', ...
+        'VerticalAlignment', 'bottom', 'FontSize', 8, 'Color', colBlue);
+end
 hold off;
-xlim([0 1]);
-xlabel(sprintf('Normalized field of %s', sys(1).name));
+xlim([-0.03 1.03]);
+xlabel(fieldLabel);
 ylabel('Magnification M');
-title(sprintf('Magnification across the field (%d pairs, %g%% MTF yield sets)', nPairs, yieldPct));
+title(sprintf('Magnification on-axis and off-axis (%d pairs, %g%% MTF yield sets)', nPairs, yieldPct));
 legend('Location', 'best');
 grid on;
 box on;
 saveFigure(fig2, fullfile(outFolder, 'Magnification_by_Field.png'));
 
-%% Figure 3: pass rate by field and at all fields
-fig3 = figure('Name', 'Pass Rate by Field', 'Color', 'w', 'Position', [140 140 950 540]);
-barData = [reshape([res.passFieldPct], nF, nTol).', [res.passAllPct].'];   % nTol x (nF + 1)
-if nTol == 1
-    hb = bar([1 2], [barData; nan(1, nF + 1)]);
-    xlim([0.5 1.5]);
-else
-    hb = bar(1:nTol, barData);
-end
-for f = 1:nF
-    hb(f).FaceColor = fieldColors(f, :);
-    hb(f).DisplayName = sprintf('Field %s', fieldNames(f));
-end
-hb(end).FaceColor = [0.2 0.2 0.2];
-hb(end).DisplayName = 'All fields (pair passes)';
-try   % value labels (R2019b+)
-    for b = 1:numel(hb)
-        for t = 1:nTol
-            text(hb(b).XEndPoints(t), hb(b).YEndPoints(t), sprintf('%.1f', barData(t, b)), ...
-                'HorizontalAlignment', 'center', 'VerticalAlignment', 'bottom', 'FontSize', 8);
-        end
-    end
-catch
-end
-set(gca, 'XTick', 1:nTol, 'XTickLabel', arrayfun(@(x) sprintf('\\pm%g', x), magTol, 'UniformOutput', false));
-ylim([0 112]);
-xlabel('Magnification tolerance');
-ylabel('Pass rate (% of pairs)');
-title('Pass rate by field and at all fields together');
-legend(hb, 'Location', 'southeast');
+%% Figure 3: change of magnification from on-axis
+fig3 = figure('Name', 'Magnification Change', 'Color', 'w', 'Position', [140 140 950 560]);
+hold on;
+fill([normFields, fliplr(normFields)], [changeStats(:, 3).', fliplr(changeStats(:, 4).')], colBlue, ...
+    'FaceAlpha', 0.12, 'EdgeColor', 'none', 'DisplayName', 'All pairs min – max');
+fill([normFields, fliplr(normFields)], [changePct(:, 1).', fliplr(changePct(:, 2).')], colBlue, ...
+    'FaceAlpha', 0.30, 'EdgeColor', 'none', 'DisplayName', 'All pairs 1 % – 99 %');
+plot(normFields, changeStats(:, 1), '-o', 'Color', colBlue, 'LineWidth', 1.6, 'MarkerFaceColor', colBlue, ...
+    'DisplayName', 'Mean of all pairs');
+plot(normFields, 100 * dDistNom, '--sk', 'LineWidth', 1.3, 'DisplayName', 'Nominal pair');
+yline(0, ':k', 'HandleVisibility', 'off');
+hold off;
+xlim([-0.03 1.03]);
+xlabel(fieldLabel);
+ylabel('\DeltaM = M(h) / M(0) - 1  (%)');
+title('Change of magnification from on-axis (effect of distortion)');
+legend('Location', 'best');
 grid on;
-saveFigure(fig3, fullfile(outFolder, 'PassRate_by_Field.png'));
+box on;
+saveFigure(fig3, fullfile(outFolder, 'Magnification_Change.png'));
 
 %% Figure 4: magnification histogram of every field
 fig4 = figure('Name', 'Magnification Histograms', 'Color', 'w', 'Position', [160 160 950 540]);
-mEdges = linspace(min([M(:); magTarget - magTol(end)]), max([M(:); magTarget + magTol(end)]), nHistBins + 1);
+mEdges = linspace(min(M(:)), max(M(:)), nHistBins + 1);
 hold on;
-for t = nTol:-1:1
-    xline(res(t).low, '--', 'Color', tolColors(t, :), 'LineWidth', 1.2, 'HandleVisibility', 'off');
-    xline(res(t).high, '--', 'Color', tolColors(t, :), 'LineWidth', 1.2, ...
-        'DisplayName', sprintf('\\pm%g limits', res(t).tol));
-end
 for f = 1:nF
     mf = M(:, :, f);
     histogram(mf(:), mEdges, 'DisplayStyle', 'stairs', 'EdgeColor', fieldColors(f, :), 'LineWidth', 1.6, ...
-        'DisplayName', sprintf('Field %s (mean %.4f)', fieldNames(f), fieldStats(f, 1)));
+        'DisplayName', sprintf('Field %s: mean %.4f, std %.4f', fieldNames(f), fieldStats(f, 1), fieldStats(f, 2)));
 end
-xline(magTarget, '-k', 'HandleVisibility', 'off');
+if magTarget >= mEdges(1) && magTarget <= mEdges(end)
+    xline(magTarget, ':k', sprintf('M = %.2f', magTarget), 'HandleVisibility', 'off');
+end
 hold off;
 xlabel('Magnification M');
 ylabel('Number of pairs');
-title('Magnification distribution of every field');
+title('Magnification distribution on-axis and off-axis');
 legend('Location', 'best');
 grid on;
 box on;
@@ -409,14 +368,13 @@ outputFile = fullfile(outFolder, 'Distortion_Magnification_Results.xlsx');
 if isfile(outputFile)
     delete(outputFile);
 end
-tolTag = @(x) strrep(sprintf('%g', x), '.', 'p');     % 0.01 -> "0p01" for sheet / column names
-fieldTag = @(h) strrep(sprintf('%.2f', h), '.', 'p');  % 0.70 -> "0p70"
+fieldTag = @(h) strrep(sprintf('%.2f', h), '.', 'p');  % 0.70 -> "0p70" for column names
 
 summaryNames = ["Pairs (n1 x n2)"; sys(1).name + " files in yield set"; sys(2).name + " files in yield set"; ...
-    "c = k*p2/p1"; "Nominal M at center"; "Nominal M at full field"; ...
-    "Nominal magnification change center -> full field (distortion)"; ...
-    "Mean M at center"; "Mean M at full field"; "Mean M shift center -> full field"; ...
-    "Std M at center"; "Std M at full field"; ...
+    "c = k*p2/p1"; "Nominal M on-axis"; "Nominal M at full field"; ...
+    "Nominal magnification change on-axis -> full field"; ...
+    "Mean M on-axis"; "Mean M at full field"; "Mean M shift on-axis -> full field"; ...
+    "Std M on-axis"; "Std M at full field"; ...
     "Nominal distortion " + sys(1).name + " at full field"; "Nominal distortion " + sys(2).name + " at full field"; ...
     "Largest OLED height reached / largest sampled height - 1"; "Max f_2(y) fit error"];
 summaryValues = [nPairs; n1; n2; magConst; mNomField(1); mNomField(end); 100 * dDistNom(end); ...
@@ -426,24 +384,19 @@ summaryUnits = ["count"; "count"; "count"; ""; ""; ""; "%"; ""; ""; ""; ""; ""; 
 writetable(table(summaryNames, summaryValues, summaryUnits, 'VariableNames', {'Parameter', 'Value', 'Unit'}), ...
     outputFile, 'Sheet', 'Summary');
 
-byTolNames = ["Tolerance (+/-)"; "Pass rate, field " + fieldNames(:); "Pass rate at ALL fields"; ...
-    "Loss from distortion (center - all fields)"; "Worst field"; ...
-    "Below lower limit, field " + fieldNames(:); "Above upper limit, field " + fieldNames(:)];
-byTolUnits = [""; repmat("%", nF, 1); "%"; "points"; ""; repmat("%", 2 * nF, 1)];
-byTol = table(byTolNames, byTolUnits, 'VariableNames', {'Parameter', 'Unit'});
-for t = 1:nTol
-    R = res(t);
-    byTol.(['Tol_' tolTag(R.tol)]) = [R.tol; R.passFieldPct(:); R.passAllPct; R.lossPct; ...
-        normFields(R.worstField); R.below(:); R.above(:)];
-end
-writetable(byTol, outputFile, 'Sheet', 'By Tolerance');
-
 writetable(table(normFields(:), sys(1).nominal.yH(:), atand(sys(1).nominal.tH(:)), yoNom(:), ...
-    fieldStats(:, 7), 100 * fieldStats(:, 8), fieldStats(:, 1), fieldStats(:, 2), fieldStats(:, 3), ...
-    fieldStats(:, 4), fieldStats(:, 5), fieldStats(:, 6), ...
+    mNomField(:), fieldStats(:, 1), fieldStats(:, 2), fieldStats(:, 3), fieldStats(:, 4), ...
+    100 * dDistNom(:), changeStats(:, 1), changeStats(:, 2), changeStats(:, 3), changeStats(:, 4), ...
     'VariableNames', {'NormField', 'Nominal_detector_height_mm', 'Nominal_field_angle_deg', ...
-    'Nominal_OLED_height_mm', 'Nominal_M', 'Nominal_M_change_pct', 'Mean_M', 'Std_M', 'Min_M', 'Max_M', ...
-    'P1_M', 'P99_M'}), outputFile, 'Sheet', 'Field Stats');
+    'Nominal_OLED_height_mm', 'Nominal_M', 'Mean_M', 'Std_M', 'Min_M', 'Max_M', ...
+    'Nominal_dM_pct', 'Mean_dM_pct', 'Std_dM_pct', 'Min_dM_pct', 'Max_dM_pct'}), ...
+    outputFile, 'Sheet', 'Field Stats');
+
+pctTable = table(pctLevels(:), 'VariableNames', {'Percentile'});
+for f = 1:nF
+    pctTable.(['M_field_' fieldTag(normFields(f))]) = fieldPct(f, :).';
+end
+writetable(pctTable, outputFile, 'Sheet', 'Percentiles');
 
 distTable = table(normFields(:), 'VariableNames', {'NormField'});
 for s = 1:2
@@ -457,11 +410,6 @@ for s = 1:2
 end
 writetable(distTable, outputFile, 'Sheet', 'Distortion');
 
-passRateAll = {nan(numel(sys(1).fileNames), nTol), nan(numel(sys(2).fileNames), nTol)};
-for t = 1:nTol
-    passRateAll{1}(in1, t) = res(t).passRate1;
-    passRateAll{2}(in2, t) = res(t).passRate2;
-end
 for s = 1:2
     fileTable = table(sys(s).fileNames, sys(s).EFL, sys(s).mtfMetric, sys(s).mtfRank, sys(s).inYield, ...
         'VariableNames', {'FileName', 'EFL_paraxial_abs_mm', 'MTF_criterion', 'MTF_rank', 'InYieldSet'});
@@ -470,10 +418,6 @@ for s = 1:2
     end
     for f = 1:nF
         fileTable.(['Distortion_' fieldTag(normFields(f)) '_pct']) = 100 * sys(s).D(:, f);
-    end
-    for t = 1:nTol
-        fileTable.(sprintf('PassRate_allFields_with_%s_tol_%s_pct', sys(3 - s).name, tolTag(magTol(t)))) = ...
-            passRateAll{s}(:, t);
     end
     writetable(fileTable, outputFile, 'Sheet', char(sys(s).name + " Files"));
 end
@@ -488,9 +432,9 @@ if writePairsSheet
             mf = M(:, :, f);
             pairTable.(['M_field_' fieldTag(normFields(f))]) = mf(:);
         end
-        pairTable.Worst_abs_deviation = worstDev(:);
-        for t = 1:nTol
-            pairTable.(['PassAll_tol_' tolTag(magTol(t))]) = res(t).passAll(:);
+        for f = 2:nF
+            df = dM(:, :, f);
+            pairTable.(['dM_field_' fieldTag(normFields(f)) '_pct']) = df(:);
         end
         writetable(pairTable, outputFile, 'Sheet', 'Pairs');
     else
@@ -503,8 +447,7 @@ settingNames = ["System 1"; "System 1 folder"; "System 1 nominal file"; "System 
     "System 2"; "System 2 folder"; "System 2 nominal file"; "System 2 afocal"; ...
     "System 2 MTF frequency (cyc/mm)"; "System 2 MTF threshold"; "System 2 MTF fields"; ...
     "File prefix"; "Yield level (%)"; "MTF frequency (fraction of Nyquist)"; "Pixel pitch (um)"; ...
-    "Pixels"; "Pixel scale k"; "c = k*p2/p1"; "Normalized fields"; "Target magnification"; "Tolerances (+/-)"; ...
-    "Magnification formula"];
+    "Pixels"; "Pixel scale k"; "c = k*p2/p1"; "Normalized fields"; "Magnification formula"];
 settingValues = strings(numel(settingNames), 1);
 for s = 1:2
     o = (s - 1) * 7;
@@ -513,14 +456,14 @@ for s = 1:2
 end
 settingValues(15:end) = [string(filePrefix); string(yieldPct); string(mtfFreqFrac); ...
     strjoin(string(pixelPitch_um), " / "); strjoin(string(nPixels), " / "); string(pixelScale); ...
-    string(magConst); strjoin(fieldNames, ", "); string(magTarget); strjoin(string(magTol), ", "); ...
+    string(magConst); strjoin(fieldNames, ", "); ...
     "M(h) = c * f1_eff(h) / f2(c * y1(h)),  f2(y) = EFL2 + a*y^2 + b*y^4"];
 writetable(table(settingNames, settingValues, 'VariableNames', {'Parameter', 'Value'}), ...
     outputFile, 'Sheet', 'Settings');
 
 %% Save raw data
-save(fullfile(outFolder, 'Distortion_Magnification_Data.mat'), 'sys', 'names1', 'names2', 'M', 'res', ...
-    'normFields', 'fieldStats', 'mNomField', 'coef2', 'magConst', 'magTarget', 'magTol', 'yieldPct', ...
+save(fullfile(outFolder, 'Distortion_Magnification_Data.mat'), 'sys', 'names1', 'names2', 'M', 'dM', ...
+    'normFields', 'fieldStats', 'fieldPct', 'changeStats', 'mNomField', 'coef2', 'magConst', 'yieldPct', ...
     'mtfFreqFrac', 'pixelPitch_um', 'nPixels', 'pixelScale');
 
 %% PDF report (A4)
@@ -540,18 +483,16 @@ end
 
 n1Name = char(sys(1).name);
 n2Name = char(sys(2).name);
-tolListText = strjoin(arrayfun(@(x) sprintf('±%g', x), magTol, 'UniformOutput', false), ' ve ');
-afocalWord = ["Hayır", "Evet"];
 modeText = ["nesne sonsuzda: y = görüntüde REAY, açı = nesne uzayında REAM/REAN", ...
             "afokal: y = nesnede (OLED) REAY, açı = görüntü uzayında REAM/REAN"];
 
 % --- Page: summary -------------------------------------------------------
 summaryLines = {
     sprintf('Tarih:                 %s', char(datetime('now', 'Format', 'dd.MM.yyyy HH:mm')))
-    sprintf('Büyütme isteri:        M = %.4f, tolerans %s, TÜM alanlarda', magTarget, tolListText)
-    sprintf('Alanlar (%s):        %s', n1Name, strjoin(fieldNames, ', '))
+    sprintf('Alanlar (%s):        %s  (0 = on-axis)', n1Name, strjoin(fieldNames, ', '))
     sprintf('c = k × p2 / p1:       %g × %.2f / %.2f = %.6f', pixelScale, pixelPitch_um(2), pixelPitch_um(1), magConst)
     sprintf('Yield seviyesi:        %%%g  (MTF, Nyquist × %g)', yieldPct, mtfFreqFrac)
+    sprintf('Çift sayısı:           %d × %d = %d', n1, n2, nPairs)
     ''
     };
 for s = 1:2
@@ -566,61 +507,62 @@ for s = 1:2
         ''}]; %#ok<AGROW>
 end
 summaryLines = [summaryLines; {
-    'BÜYÜTME (alan bazında)'
-    '  Alan   Nominal M   Ort. M     Std M     Min M     Max M'
+    'BÜYÜTME M (tüm çiftler)'
+    '  Alan   Nominal M   Ort. M     Std M     Min M     Max M     %1 M      %99 M'
     }];
 for f = 1:nF
-    summaryLines{end + 1, 1} = sprintf('  %-5s  %9.5f  %9.5f  %8.5f  %8.5f  %8.5f', fieldNames(f), ...
-        mNomField(f), fieldStats(f, 1), fieldStats(f, 2), fieldStats(f, 3), fieldStats(f, 4)); %#ok<SAGROW>
+    summaryLines{end + 1, 1} = sprintf('  %-5s  %9.5f  %9.5f  %8.5f  %8.5f  %8.5f  %8.5f  %8.5f', fieldNames(f), ...
+        mNomField(f), fieldStats(f, 1), fieldStats(f, 2), fieldStats(f, 3), fieldStats(f, 4), ...
+        fieldPct(f, 1), fieldPct(f, end)); %#ok<SAGROW>
 end
-summaryLines{end + 1, 1} = '';
-for t = 1:nTol
-    R = res(t);
-    summaryLines = [summaryLines; {
-        sprintf('TOLERANS ±%g', R.tol)
-        sprintf('  Alan bazında geçme:  %s', strjoin(compose("%s: %%%.2f", fieldNames(:), R.passFieldPct(:)).', ', '))
-        sprintf('  TÜM ALANLARDA GEÇME: %%%.2f   (yalnız merkez: %%%.2f, distorsiyon kaybı %.2f puan)', ...
-            R.passAllPct, R.passCenterPct, R.lossPct)
-        ''}]; %#ok<AGROW>
+summaryLines = [summaryLines; {
+    ''
+    'ON-AXIS''E GÖRE DEĞİŞİM ΔM = M(h) / M(0) − 1  (%)'
+    '  Alan   Nominal    Ortalama   Std       Min        Max'
+    }];
+for f = 2:nF
+    summaryLines{end + 1, 1} = sprintf('  %-5s  %+8.3f  %+9.3f  %8.3f  %+9.3f  %+9.3f', fieldNames(f), ...
+        100 * dDistNom(f), changeStats(f, 1), changeStats(f, 2), changeStats(f, 3), changeStats(f, 4)); %#ok<SAGROW>
 end
-summaryLines{end + 1, 1} = sprintf('Çift sayısı: %d × %d = %d', n1, n2, nPairs);
 summaryFig = textPage('DİSTORSİYONLU BÜYÜTME ANALİZ RAPORU', summaryLines, 'Courier New', 8);
 
-% --- Page: results and assessment ----------------------------------------
-assess = {'GENEL SONUÇ'};
-for t = 1:nTol
-    R = res(t);
-    assess{end + 1, 1} = sprintf(['•  ±%g: yalnız merkezde değerlendirildiğinde çiftlerin %%%.2f''si, distorsiyon ' ...
-        'dahil tüm alanlarda değerlendirildiğinde %%%.2f''si isteri sağlıyor. Distorsiyonun maliyeti %.2f puan. ' ...
-        'En çok kaybedilen alan: %s (%%%.2f).'], R.tol, R.passCenterPct, R.passAllPct, R.lossPct, ...
-        fieldNames(R.worstField), R.passFieldPct(R.worstField)); %#ok<SAGROW>
-end
-
-assess = [assess; {''; 'NOMİNAL DİSTORSİYON'}];
-assess{end + 1, 1} = sprintf(['Tam alanda nominal distorsiyon: %s %+.3f %%, %s %+.3f %% (her biri kendi tam ' ...
-    'alanında). Nominal çiftin büyütmesi merkezde %.5f, tam alanda %.5f; distorsiyon tam alanda büyütmeyi ' ...
-    '%+.3f %% değiştiriyor.'], n1Name, 100 * sys(1).nominal.D(end), n2Name, 100 * sys(2).nominal.D(end), ...
-    mNomField(1), mNomField(end), 100 * dDistNom(end));
+% --- Page: assessment ----------------------------------------------------
+assess = {
+    'ON-AXIS VE OFF-AXIS BÜYÜTME'
+    sprintf(['%%%g MTF yield kümelerindeki %d çiftin on-axis büyütmesi ortalama %.5f (std %.5f, %.5f – %.5f). ' ...
+     'Tam alanda (%s) ortalama %.5f (std %.5f, %.5f – %.5f).'], yieldPct, nPairs, fieldStats(1, 1), ...
+     fieldStats(1, 2), fieldStats(1, 3), fieldStats(1, 4), fieldNames(end), fieldStats(end, 1), ...
+     fieldStats(end, 2), fieldStats(end, 3), fieldStats(end, 4))
+    ''
+    'NOMİNAL DİSTORSİYONUN ETKİSİ'
+    sprintf(['Tam alanda nominal distorsiyon: %s %+.3f %%, %s %+.3f %% (her biri kendi tam alanında). Nominal ' ...
+     'çiftin büyütmesi on-axis %.5f, tam alanda %.5f; distorsiyon tam alanda büyütmeyi %+.3f %% değiştiriyor.'], ...
+     n1Name, 100 * sys(1).nominal.D(end), n2Name, 100 * sys(2).nominal.D(end), mNomField(1), mNomField(end), ...
+     100 * dDistNom(end))
+    };
 if sign(sys(1).nominal.D(end)) == sign(sys(2).nominal.D(end)) && sys(1).nominal.D(end) ~= 0
     assess{end + 1, 1} = ['İki sistemin distorsiyonu aynı işaretli; büyütmede birbirini kısmen götürüyor. ' ...
-        'Etkiyi belirleyen iki distorsiyonun farkıdır.'];
+        'Off-axis büyütmeyi belirleyen iki distorsiyonun farkıdır.'];
 else
     assess{end + 1, 1} = ['İki sistemin distorsiyonu zıt işaretli; büyütmedeki etkileri toplanıyor. ' ...
-        'Distorsiyonların eşleştirilmesi (aynı işaret ve büyüklük) büyütme hatasını azaltır.'];
+        'Distorsiyonların eşleştirilmesi (aynı işaret ve büyüklük) off-axis büyütme farkını azaltır.'];
 end
-
-assess = [assess; {''; 'KAYMA MI, SAÇILIM MI?'}];
-assess{end + 1, 1} = sprintf(['Tüm çiftlerin ortalama büyütmesi merkezde %.5f, tam alanda %.5f (fark %+.5f). Bu fark ' ...
-    'nominal distorsiyon farkından gelir ve tüm ürünlerde aynıdır: tasarımda distorsiyonlar eşleştirilerek ' ...
-    'veya görüntü işlemede distorsiyon düzeltmesiyle giderilebilir.'], fieldStats(1, 1), fieldStats(end, 1), meanShiftEdge);
-assess{end + 1, 1} = sprintf(['Büyütmenin std''si merkezde %.5f, tam alanda %.5f (%+.5f). Artış, toleransların ' ...
-    'distorsiyonu dosyadan dosyaya değiştirmesinden gelir; bu kısım ürüne özeldir ve sabit bir düzeltmeyle ' ...
-    'giderilemez.'], fieldStats(1, 2), fieldStats(end, 2), stdIncreaseEdge);
-
-assess = [assess; {''; 'KONTROL'}];
-assess{end + 1, 1} = ['Okunan nominal distorsiyonu, nominal dosyalarda OpticStudio''nun Field Curvature / Distortion ' ...
-    'analizindeki F-Tan(Theta) distorsiyonuyla karşılaştırın (özet sayfasında her alan için verilmiştir). ' ...
-    'Değerler uyuşmuyorsa alan tanımı veya ışın okuma yönü (afokal / sonlu) kontrol edilmelidir.'];
+assess = [assess; {
+    ''
+    'TOLERANSLARIN ETKİSİ'
+    sprintf(['Çiftlerin ortalama büyütmesi on-axis''ten tam alana %+.5f değişiyor (ortalama ΔM %+.3f %%). Bu kısım ' ...
+     'nominal distorsiyon farkından gelir ve tüm ürünlerde aynıdır; tasarımda distorsiyonlar eşleştirilerek ' ...
+     'veya görüntü işlemede distorsiyon düzeltmesiyle giderilebilir.'], meanShiftEdge, changeStats(end, 1))
+    sprintf(['ΔM''nin çiftler arasındaki std''si tam alanda %.3f %% (%.3f %% – %+.3f %%). Bu, toleransların ' ...
+     'distorsiyonu dosyadan dosyaya değiştirmesinden gelir; ürüne özeldir ve sabit bir düzeltmeyle giderilemez. ' ...
+     'Büyütmenin std''si on-axis %.5f, tam alanda %.5f (%+.5f).'], changeStats(end, 2), changeStats(end, 3), ...
+     changeStats(end, 4), fieldStats(1, 2), fieldStats(end, 2), stdIncreaseEdge)
+    ''
+    'KONTROL'
+    ['Okunan nominal distorsiyonu, nominal dosyalarda OpticStudio''nun Field Curvature / Distortion analizindeki ' ...
+     'F-Tan(Theta) distorsiyonuyla karşılaştırın (özet sayfasında her alan için verilmiştir). Değerler ' ...
+     'uyuşmuyorsa alan tanımı veya ışın okuma yönü (afokal / sonlu) kontrol edilmelidir.']
+    }];
 if extrapPct > 2
     assess{end + 1, 1} = sprintf(['UYARI: %s''ın tam alanı OLED''de, %s''in örneklenen en büyük yüksekliğinin %%%.1f ' ...
         'üzerine çıkıyor; orada kolimatörün etkin EFL''si uyum eğrisinden dışarı doğru tahmin edildi.'], ...
@@ -628,24 +570,23 @@ if extrapPct > 2
 end
 if min(n1, n2) < 50
     assess = [assess; {''; 'UYARI – ÖRNEKLEM BÜYÜKLÜĞÜ'}];
-    assess{end + 1, 1} = sprintf(['Yield kümelerinde %d ve %d dosya var; sonucun güvenilirliği çift sayısıyla ' ...
-        'değil dosya sayısıyla sınırlıdır. Sistem başına en az 50 – 100 MC dosyası önerilir.'], n1, n2);
+    assess{end + 1, 1} = sprintf(['Yield kümelerinde %d ve %d dosya var; istatistiklerin güvenilirliği çift ' ...
+        'sayısıyla değil dosya sayısıyla sınırlıdır. Sistem başına en az 50 – 100 MC dosyası önerilir.'], n1, n2);
 end
-assessFig = textPage('1. SONUÇ VE DEĞERLENDİRME', assess, 'Arial', 10);
+assessFig = textPage('1. DEĞERLENDİRME', assess, 'Arial', 10);
 
 % --- Page: method --------------------------------------------------------
 method = {
     'NEDEN DİSTORSİYON?'
-    ['Paraksiyel EFL yalnızca merkez civarındaki büyütmeyi verir. Distorsiyonlu bir sistemde gerçek görüntü ' ...
-     'yüksekliği y = f · tan θ · (1 + D(θ)) olur; bu yüzden büyütme alan boyunca değişir. İki sistem arka arkaya ' ...
-     'çalıştığı için kenar alanda büyütme yaklaşık iki sistemin distorsiyon farkı kadar değişir: ' ...
-     'M(θ) ≈ M(0) × (1 + D_1 − D_2).']
+    ['Paraksiyel EFL yalnızca on-axis büyütmeyi verir. Distorsiyonlu bir sistemde gerçek görüntü yüksekliği ' ...
+     'y = f · tan θ · (1 + D(θ)) olur; bu yüzden büyütme alan boyunca değişir. İki sistem arka arkaya çalıştığı ' ...
+     'için off-axis büyütme yaklaşık iki sistemin distorsiyon farkı kadar değişir: M(θ) ≈ M(0) × (1 + D_1 − D_2).']
     ''
     'ADIM 1 – ETKİN EFL'
     sprintf(['Her MC dosyasında normalize alanlarda (%s) birincil dalga boyunda gerçek ana ışın izlenir ve ' ...
      'f_eff(h) = |y| / |tan θ| hesaplanır. Nesnesi sonsuzda olan dosyada (afokal değil) y görüntü yüzeyinde ' ...
      'REAY, tan θ nesne uzayında REAM / REAN''dır. Afokal dosyada (nesne = OLED) y nesne yüzeyinde REAY, tan θ ' ...
-     'görüntü uzayında REAM / REAN''dır. Merkezde (h = 0) paraksiyel EFL (EFFL) kullanılır. Distorsiyon ' ...
+     'görüntü uzayında REAM / REAN''dır. On-axis''te (h = 0) paraksiyel EFL (EFFL) kullanılır. Distorsiyon ' ...
      'D(h) = f_eff(h) / EFL − 1''dir.'], strjoin(fieldNames, ', '))
     ''
     'ADIM 2 – YIELD KÜMELERİ'
@@ -660,22 +601,49 @@ method = {
      'c × f_1,eff(h) / f_2(y_OLED)''dir. İki sistemin alanları farklı olsa da her nokta OLED üzerindeki gerçek ' ...
      'yükseklikte eşleştirilir.'], n1Name, magConst, n2Name)
     ''
-    'ADIM 4 – ÇAPRAZLAMA VE GEÇME KOŞULU'
-    sprintf(['%s yield kümesindeki her dosya %s yield kümesindeki her dosyayla eşleştirilir (%d × %d = %d çift). ' ...
-     'Bir çift ancak TÜM alanlarda |M(h) − %.2f| ≤ tolerans ise geçer. Alan bazında geçme oranları da ayrıca ' ...
-     'verilir; merkez alanın sonucu distorsiyonsuz analizle aynıdır.'], n1Name, n2Name, n1, n2, nPairs, magTarget)
+    'ADIM 4 – ÇAPRAZLAMA'
+    sprintf(['%s yield kümesindeki her dosya %s yield kümesindeki her dosyayla eşleştirilir (%d × %d = %d çift) ' ...
+     've her çiftin her alandaki büyütmesi hesaplanır. Her alan için büyütmenin istatistikleri ile on-axis''e ' ...
+     'göre değişimi ΔM(h) = M(h) / M(0) − 1 verilir.'], n1Name, n2Name, n1, n2, nPairs)
     ''
     'VARSAYIMLAR'
     ['•  Sistemler dönel simetrik kabul edilir ve alanlar y ekseninde (Hy) örneklenir. Ana ışın birincil ' ...
      'dalga boyunda izlenir; renk farkı (lateral renk) dahil değildir.']
-    ['•  Görüntü işlemede distorsiyon düzeltmesi yapılmadığı varsayılır. Yapılıyorsa nominal distorsiyon ' ...
-     'farkı düzeltilir ve geriye yalnız toleransların yarattığı değişim kalır.']
+    '•  Görüntü işlemede distorsiyon düzeltmesi yapılmadığı varsayılır.'
     };
 methodFig = textPage('2. YÖNTEM', method, 'Arial', 10);
 
 % --- Figure pages --------------------------------------------------------
 plotFigs = gobjects(4, 1);
-plotFigs(1) = figurePage(fig1, '3. ALANA GÖRE DİSTORSİYON', {
+plotFigs(1) = figurePage(fig2, '3. ON-AXIS VE OFF-AXIS BÜYÜTME', {
+    'NASIL OKUNUR'
+    sprintf(['•  Yatay eksen %s''ın normalize alanıdır (0 = on-axis). Dikey eksen büyütmedir. Mavi çizgi tüm ' ...
+     'çiftlerin ortalaması (değeri noktaların üstünde yazılı), koyu mavi alan çiftlerin %%1 – %%99''u, açık mavi ' ...
+     'alan en küçük ve en büyük değerdir. Kesikli siyah çizgi nominal çifttir, noktalı çizgi M = %.2f.'], n1Name, magTarget)
+    'NASIL YORUMLANIR'
+    ['•  Ortalama çizginin on-axis''ten kenara eğimi distorsiyon farkının etkisidir; tüm ürünlerde aynıdır ve ' ...
+     'tasarımla veya görüntü işlemeyle düzeltilebilir.']
+    '•  Bantların kenara doğru genişlemesi toleransların distorsiyonu değiştirmesinden gelir; ürüne özeldir.'
+    }, false);
+plotFigs(2) = figurePage(fig3, '4. ON-AXIS''E GÖRE BÜYÜTME DEĞİŞİMİ', {
+    'NASIL OKUNUR'
+    ['•  Her çiftin off-axis büyütmesinin kendi on-axis büyütmesine göre yüzde değişimidir: ' ...
+     'ΔM(h) = M(h) / M(0) − 1. On-axis''te tanım gereği sıfırdır. Bantlar ve çizgiler önceki grafikle aynı anlamdadır.']
+    'NASIL YORUMLANIR'
+    ['•  Bu grafik EFL saçılımını ayıklar ve yalnız distorsiyonun etkisini gösterir. Ortalama çizgi nominal ' ...
+     'distorsiyon farkını, bant genişliği toleransların distorsiyona etkisini verir.']
+    ['•  Örneğin tam alanda ortalama −%0.8 ise, on-axis büyütmesi 1.000 olan bir ürünün kenarda büyütmesi ' ...
+     'yaklaşık 0.992''dir.']
+    }, false);
+plotFigs(3) = figurePage(fig4, '5. ALANLARIN BÜYÜTME DAĞILIMI', {
+    'NASIL OKUNUR'
+    ['•  Her renkli basamak çizgisi bir alanın büyütme dağılımıdır (tüm çiftler). Lejantta her alanın ' ...
+     'ortalaması ve std''si yazılıdır.']
+    'NASIL YORUMLANIR'
+    ['•  Off-axis dağılımları on-axis''e göre kaymışsa sebep nominal distorsiyon farkıdır; genişlemişse sebep ' ...
+     'toleransların distorsiyona etkisidir.']
+    }, false);
+plotFigs(4) = figurePage(fig1, '6. ALANA GÖRE DİSTORSİYON', {
     'NASIL OKUNUR'
     ['•  Her panel bir sistemdir. Yatay eksen o sistemin normalize alanı, dikey eksen F-Tan(θ) ' ...
      'distorsiyonudur (%). Kesikli siyah çizgi nominal tasarım, mavi çizgi yield kümesinin ortalaması, ' ...
@@ -683,36 +651,8 @@ plotFigs(1) = figurePage(fig1, '3. ALANA GÖRE DİSTORSİYON', {
     'NASIL YORUMLANIR'
     ['•  İki sistemin tam alandaki nominal distorsiyonları aynı işaretli ve yakın büyüklükteyse büyütmeye ' ...
      'etkileri birbirini götürür; zıt işaretliyse toplanır.']
-    ['•  Açık mavi alanın genişliği, toleransların distorsiyonu ne kadar değiştirdiğidir. Geniş ise kenar ' ...
-     'alandaki büyütme üründen ürüne değişir.']
-    }, false);
-plotFigs(2) = figurePage(fig2, '4. ALANA GÖRE BÜYÜTME', {
-    'NASIL OKUNUR'
-    sprintf(['•  Yatay eksen %s''ın normalize alanı, dikey eksen büyütmedir. Renkli bantlar tolerans isterleridir. ' ...
-     'Mavi çizgi tüm çiftlerin ortalaması, koyu mavi alan çiftlerin %%1 – %%99''u, açık mavi alan en küçük ' ...
-     've en büyük değerdir. Kesikli siyah çizgi nominal çifttir.'], n1Name)
-    'NASIL YORUMLANIR'
-    ['•  Merkezden kenara ortalama çizginin eğimi distorsiyon farkının etkisidir; tüm ürünlerde aynıdır ve ' ...
-     'tasarımla veya görüntü işlemeyle düzeltilebilir.']
-    ['•  Bantların kenara doğru genişlemesi toleransların distorsiyonu değiştirmesinden gelir; ürüne özeldir.']
-    ['•  Mavi alan bir tolerans bandından hangi alanda taşıyorsa, o toleransta çiftleri o alan düşürüyordur.']
-    }, false);
-plotFigs(3) = figurePage(fig3, '5. ALAN BAZINDA GEÇME ORANI', {
-    'NASIL OKUNUR'
-    ['•  Her tolerans için renkli çubuklar, çiftlerin her alanda ayrı ayrı isteri sağlama oranıdır. Koyu ' ...
-     'çubuk, tüm alanları birlikte sağlayan çiftlerin oranıdır (asıl sonuç).']
-    'NASIL YORUMLANIR'
-    ['•  Merkez alanın çubuğu distorsiyonsuz analizin sonucudur. Merkez ile koyu çubuk arasındaki fark ' ...
-     'distorsiyonun maliyetidir.']
-    '•  En kısa renkli çubuk, o toleransta çiftleri en çok düşüren alandır.'
-    }, false);
-plotFigs(4) = figurePage(fig4, '6. ALANLARIN BÜYÜTME DAĞILIMI', {
-    'NASIL OKUNUR'
-    ['•  Her renkli basamak çizgisi bir alanın büyütme dağılımıdır (tüm çiftler). Kesikli çizgiler tolerans ' ...
-     'sınırlarıdır.']
-    'NASIL YORUMLANIR'
-    ['•  Kenar alanların dağılımı merkezinkine göre kaymışsa sebep nominal distorsiyon farkıdır; genişlemişse ' ...
-     'sebep toleransların distorsiyona etkisidir.']
+    ['•  Açık mavi alanın genişliği, toleransların distorsiyonu ne kadar değiştirdiğidir. Geniş ise off-axis ' ...
+     'büyütme üründen ürüne değişir.']
     }, false);
 
 % --- Assemble pages ------------------------------------------------------
@@ -748,7 +688,7 @@ fid = fopen(summaryFile, 'w', 'n', 'UTF-8');
 if fid > 0
     fprintf(fid, '%s\r\n', 'DİSTORSİYONLU BÜYÜTME ANALİZ ÖZETİ', '');
     fprintf(fid, '%s\r\n', summaryLines{:});
-    fprintf(fid, '\r\n%s\r\n\r\n', 'SONUÇ VE DEĞERLENDİRME');
+    fprintf(fid, '\r\n%s\r\n\r\n', 'DEĞERLENDİRME');
     fprintf(fid, '%s\r\n', assess{:});
     fclose(fid);
 end
