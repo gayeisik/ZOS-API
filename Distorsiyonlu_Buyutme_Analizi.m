@@ -7,8 +7,7 @@
 %   seçilir; 1. sistemin yield kümesindeki her dosya 2. sistemin yield
 %   kümesindeki her dosyayla eşleştirilir (n1 x n2 çift). Her çiftin on-axis
 %   (0) ve off-axis alanlardaki büyütmesi, y ve x eksenlerinde ayrı ayrı
-%   hesaplanır ve alan / eksen bazında büyütme değerleri / dağılımları ile
-%   iki eksen arasındaki fark (tilt / decenter kaynaklı asimetri) verilir.
+%   hesaplanır ve alan / eksen bazında büyütme değerleri / dağılımları verilir.
 %   Geçti / kaldı değerlendirmesi yapılmaz.
 %   On-axis (0) paraksiyel EFL ile hesaplanır; distorsiyonsuz önceki
 %   analizle (Iki_Sistem_Buyutme_Analizi.m) aynı büyütmeyi verir.
@@ -53,10 +52,8 @@
 %                                        = c × f_1,eff(h) / f_2(y_OLED)
 %   Yaklaşık olarak M(h) ≈ M(0) × (1 + D_1(h) − D_2), yani kenar alanda
 %   büyütme iki sistemin distorsiyon farkı kadar değişir.
-%   Off-axis büyütme değişimi:      ΔM(h) = M(h) / M(0) − 1  (çift başına, %)
 %   Her alan ve eksen için: nominal çiftin M'si; tüm çiftlerin M ortalaması,
-%   std, min, max ve yüzdelikleri; ΔM'nin aynı istatistikleri.
-%   Eksen asimetrisi (aynı çift, aynı alan):  M_x / M_y − 1  (%)
+%   std, min, max ve yüzdelikleri.
 %
 % AYARLAR (User settings)
 %   sysName, pixelPitch_um, nPixels, pixelScale, filePrefix, yieldPct,
@@ -64,21 +61,16 @@
 %   writePairsSheet, nHistBins
 %
 % ÇIKTILAR (1. sistemin klasöründe "BÜYÜTME-DİSTORSİYON ANALİZİ - %90 YIELD")
-%   Distortion_by_Field.png      : iki sistemin alana göre distorsiyonu
-%                                  (nominal, yield kümesi ortalaması ve aralığı)
-%   Magnification_by_Field.png   : alana göre büyütme (ortalama, %1-%99, min-max)
-%   Magnification_Change.png     : on-axis'e göre büyütme değişimi ΔM(h)
-%   Magnification_Histograms.png : her alanın büyütme dağılımı (eksen başına)
-%   Axis_Asymmetry.png           : x – y ekseni büyütme farkı
+%   Yalnızca büyütme M ve dağılımı verilir (distorsiyon arka planda kullanılır).
+%   Magnification_Histograms_y.png / _x.png : her alanın büyütme histogramı
+%                                  (ortalama, std, min, max, %1 – %99, nominal)
+%   Magnification_by_Field.png   : özet; alana göre ortalama, %1 – %99, min – max
 %   *.fig                        : grafiklerin düzenlenebilir MATLAB dosyaları
-%   Distortion_Magnification_Results.xlsx : "Summary", "Field Stats",
-%                                  "Percentiles", "Distortion", "Axis
-%                                  Asymmetry", sistem başına
-%                                  dosya tabloları, "Pairs" (her çiftin her
-%                                  alandaki M'si), "Settings"
-%   Distortion_Magnification_Report.pdf : A4 rapor; özet, değerlendirme, yöntem,
-%                                  grafikler ve nasıl yorumlanacakları
-%   Distortion_Magnification_Data.mat : tüm ham veriler
+%   Magnification_by_Field_Results.xlsx : "Magnification" (alan / eksen başına
+%                                  istatistik), sistem başına dosya tabloları,
+%                                  "Pairs" (her çiftin her alandaki M'si), "Settings"
+%   Magnification_by_Field_Report.pdf : sonuç tablosu, nasıl okunur, grafikler
+%   Magnification_by_Field_Data.mat : ham veriler
 %   Analysis_Summary.txt, Analysis_Log.txt
 
 clc;
@@ -193,10 +185,6 @@ for s = 1:2
 
     fprintf('%s yield %g %%: MTF >= %.4f at %.2f cyc/mm -> %d of %d valid files\n', ...
         sys(s).name, yieldPct, sys(s).threshold, sys(s).mtfFreq, sum(sys(s).inYield), sum(sys(s).valid));
-    for a = 1:nAx
-        fprintf('%s nominal distortion (%s): %s\n', sys(s).name, fieldAxes(a), ...
-            strjoin(compose("h=%.2f: %+.3f %%", normFields(:), 100 * sys(s).nominal.D(1, :, a).').', ', '));
-    end
 end
 
 %% Field-dependent magnification of every pair, for every axis
@@ -250,63 +238,35 @@ end
 if max(fitErr2(:)) > 1e-3 * median(E2)
     warning('f_2(y) fit error up to %.4f mm (relative %.2e).', max(fitErr2(:)), max(fitErr2(:)) / median(E2));
 end
-dDistNom = mNomField ./ mNomField(1, :) - 1;            % nF x nAx, change caused by the nominal distortion
 
 %% Statistics of the magnification at every field and axis
-dM = 100 * (M ./ M(:, :, 1, :) - 1);                    % change from on-axis (%)
 pctLevels = [1 5 50 95 99];
 nP = numel(pctLevels);
 fieldStats = zeros(nF, 4, nAx);                          % M: mean std min max
 fieldPct = zeros(nF, nP, nAx);                           % M percentiles
-changeStats = zeros(nF, 4, nAx);                         % dM (%): mean std min max
-changePct = zeros(nF, 2, nAx);                           % dM (%): P1 P99
 for a = 1:nAx
     for f = 1:nF
         mf = M(:, :, f, a);
         mf = mf(:);
-        df = dM(:, :, f, a);
-        df = df(:);
         fieldStats(f, :, a) = [mean(mf), std(mf), min(mf), max(mf)];
         fieldPct(f, :, a) = quantileSorted(sort(mf), pctLevels / 100);
-        changeStats(f, :, a) = [mean(df), std(df), min(df), max(df)];
-        changePct(f, :, a) = quantileSorted(sort(df), [1 99] / 100);
     end
 end
-
-% x - y asymmetry: M of axis 2 relative to axis 1 for the same pair and field (%)
-hasAniso = nAx >= 2;
-if hasAniso
-    aniso = 100 * (M(:, :, :, 2) ./ M(:, :, :, 1) - 1);
-    anisoStats = zeros(nF, 6);                           % mean std min max P1 P99
-    for f = 1:nF
-        af = aniso(:, :, f);
-        af = af(:);
-        q = quantileSorted(sort(af), [1 99] / 100);
-        anisoStats(f, :) = [mean(af), std(af), min(af), max(af), q(1), q(2)];
-    end
-    anisoNom = 100 * (mNomField(:, 2) ./ mNomField(:, 1) - 1);
-end
+iP1 = find(pctLevels == 1);
+iP99 = find(pctLevels == 99);
+fieldKind = repmat("off-axis", 1, nF);
+fieldKind(normFields == 0) = "on-axis";
 
 %% Command window summary
-fprintf('\n===== MAGNIFICATION BY FIELD (%g %% MTF yield sets) =====\n', yieldPct);
-fprintf('c = k x p2 / p1 = %g x %g / %g = %.6f;  pairs: %d x %d = %d\n', ...
-    pixelScale, pixelPitch_um(2), pixelPitch_um(1), magConst, n1, n2, nPairs);
+fprintf('\n===== MAGNIFICATION (%g %% MTF yield sets, %d x %d = %d pairs) =====\n', yieldPct, n1, n2, nPairs);
 for a = 1:nAx
-    fprintf('\nAxis %s:\n', fieldAxes(a));
-    fprintf('%-6s %10s %10s %9s %10s %10s %10s %10s %10s %10s\n', 'Field', 'Nominal M', 'Mean M', 'Std M', ...
-        'Min M', 'Max M', 'dM mean %', 'dM min %', 'dM max %', 'Nom. dM %');
+    fprintf('\n%s axis\n', fieldAxes(a));
+    fprintf('%-6s %-9s %10s %10s %9s %10s %10s %10s %10s\n', 'Field', '', 'Nominal', 'Mean', 'Std', ...
+        'Min', 'Max', '1 %', '99 %');
     for f = 1:nF
-        fprintf('%-6s %10.5f %10.5f %9.5f %10.5f %10.5f %+10.3f %+10.3f %+10.3f %+10.3f\n', fieldNames(f), ...
+        fprintf('%-6s %-9s %10.5f %10.5f %9.5f %10.5f %10.5f %10.5f %10.5f\n', fieldNames(f), fieldKind(f), ...
             mNomField(f, a), fieldStats(f, 1, a), fieldStats(f, 2, a), fieldStats(f, 3, a), fieldStats(f, 4, a), ...
-            changeStats(f, 1, a), changeStats(f, 3, a), changeStats(f, 4, a), 100 * dDistNom(f, a));
-    end
-end
-if hasAniso
-    fprintf('\nAsymmetry M_%s / M_%s - 1 (%%):\n', fieldAxes(2), fieldAxes(1));
-    fprintf('%-6s %10s %10s %9s %10s %10s\n', 'Field', 'Nominal', 'Mean', 'Std', 'Min', 'Max');
-    for f = 1:nF
-        fprintf('%-6s %+10.4f %+10.4f %9.4f %+10.4f %+10.4f\n', fieldNames(f), anisoNom(f), anisoStats(f, 1), ...
-            anisoStats(f, 2), anisoStats(f, 3), anisoStats(f, 4));
+            fieldPct(f, iP1, a), fieldPct(f, iP99, a));
     end
 end
 
@@ -318,225 +278,105 @@ if ~isfolder(outFolder)
     mkdir(outFolder);
 end
 
-axisPalette = [0 0.45 0.74; 0.85 0.33 0.10; 0.47 0.67 0.19];
-axisColors = axisPalette(mod(0:nAx - 1, size(axisPalette, 1)) + 1, :);
-axisMarkers = {'o', 's', '^'};
-fieldColors = lines(nF);
-fieldLabel = sprintf('Normalized field of %s (0 = on-axis)', sys(1).name);
-axLabel = @(a) sprintf('%s axis', fieldAxes(a));
+colBlue = [0 0.45 0.74];
+axisPalette = [0 0.45 0.74; 0.85 0.33 0.10];
+axisColors = axisPalette(mod(0:nAx - 1, 2) + 1, :);
+mEdges = linspace(min(M(:)), max(M(:)), nHistBins + 1);    % same bins in every panel
+nCols = min(nF, 2);
+nRows = ceil(nF / nCols);
 
-%% Figure 1: distortion by field
-fig1 = figure('Name', 'Distortion by Field', 'Color', 'w', 'Position', [100 100 950 700]);
-for s = 1:2
-    subplot(2, 1, s);
-    hold on;
-    for a = 1:nAx
-        Dy = 100 * sys(s).D(sys(s).inYield, :, a);
-        fill([normFields, fliplr(normFields)], [min(Dy, [], 1), fliplr(max(Dy, [], 1))], axisColors(a, :), ...
-            'FaceAlpha', 0.12, 'EdgeColor', 'none', 'DisplayName', [axLabel(a) ': yield set min – max']);
-        plot(normFields, mean(Dy, 1), ['-' axisMarkers{a}], 'Color', axisColors(a, :), 'LineWidth', 1.5, ...
-            'MarkerFaceColor', axisColors(a, :), 'DisplayName', [axLabel(a) ': yield set mean']);
-        plot(normFields, 100 * sys(s).nominal.D(1, :, a), ['--' axisMarkers{a}], 'Color', 'k', 'LineWidth', 1.1, ...
-            'DisplayName', [axLabel(a) ': nominal']);
-    end
-    yline(0, ':k', 'HandleVisibility', 'off');
-    hold off;
-    xlabel(sprintf('Normalized field of %s', sys(s).name));
-    ylabel('Distortion F-Tan(\theta) (%)');
-    title(sprintf('%s distortion: nominal %+.3f %% at full field (%s)', sys(s).name, ...
-        100 * sys(s).nominal.D(1, end, 1), fieldAxes(1)));
-    legend('Location', 'best');
-    grid on;
-    box on;
-end
-saveFigure(fig1, fullfile(outFolder, 'Distortion_by_Field.png'));
-
-%% Figure 2: magnification by field
-fig2 = figure('Name', 'Magnification by Field', 'Color', 'w', 'Position', [120 120 950 560]);
-hold on;
+%% Figures 1..nAx: magnification histogram of every field (one figure per axis)
+histFigs = gobjects(nAx, 1);
 for a = 1:nAx
-    fill([normFields, fliplr(normFields)], [fieldPct(:, 1, a).', fliplr(fieldPct(:, end, a).')], axisColors(a, :), ...
-        'FaceAlpha', 0.18, 'EdgeColor', 'none', 'DisplayName', [axLabel(a) ': 1 % – 99 %']);
-    plot(normFields, fieldStats(:, 3, a), ':', 'Color', axisColors(a, :), 'HandleVisibility', 'off');
-    plot(normFields, fieldStats(:, 4, a), ':', 'Color', axisColors(a, :), 'DisplayName', [axLabel(a) ': min / max']);
-    plot(normFields, fieldStats(:, 1, a), ['-' axisMarkers{a}], 'Color', axisColors(a, :), 'LineWidth', 1.6, ...
-        'MarkerFaceColor', axisColors(a, :), 'DisplayName', [axLabel(a) ': mean']);
-    plot(normFields, mNomField(:, a), ['--' axisMarkers{a}], 'Color', 'k', 'LineWidth', 1.1, ...
-        'DisplayName', [axLabel(a) ': nominal pair']);
+    histFigs(a) = figure('Name', sprintf('Magnification %s axis', fieldAxes(a)), 'Color', 'w', ...
+        'Position', [100 + 20 * a, 60, 1000, 380 * nRows]);
+    for f = 1:nF
+        subplot(nRows, nCols, f);
+        mf = M(:, :, f, a);
+        histogram(mf(:), mEdges, 'FaceColor', axisColors(a, :), 'EdgeColor', 'none');
+        hold on;
+        yl = ylim;
+        patch([fieldPct(f, iP1, a) fieldPct(f, iP99, a) fieldPct(f, iP99, a) fieldPct(f, iP1, a)], ...
+            [0 0 yl(2) yl(2)], [0.5 0.5 0.5], 'FaceAlpha', 0.10, 'EdgeColor', 'none');
+        xline(fieldStats(f, 1, a), '-k', 'LineWidth', 1.8);
+        xline(mNomField(f, a), '--k', 'LineWidth', 1.1);
+        if magTarget >= mEdges(1) && magTarget <= mEdges(end)
+            xline(magTarget, ':', 'Color', [0.8 0 0], 'LineWidth', 1.2);
+        end
+        hold off;
+        xlim([mEdges(1) mEdges(end)]);
+        ylim(yl);
+        text(0.98, 0.96, sprintf(['Mean     %.5f\nStd      %.5f\nMin      %.5f\nMax      %.5f\n' ...
+            '1 %% – 99 %%\n%.5f – %.5f\nNominal  %.5f'], fieldStats(f, 1, a), fieldStats(f, 2, a), ...
+            fieldStats(f, 3, a), fieldStats(f, 4, a), fieldPct(f, iP1, a), fieldPct(f, iP99, a), mNomField(f, a)), ...
+            'Units', 'normalized', 'HorizontalAlignment', 'right', 'VerticalAlignment', 'top', ...
+            'FontName', 'Courier New', 'FontSize', 8, 'BackgroundColor', 'w', 'EdgeColor', [0.7 0.7 0.7]);
+        xlabel('Magnification M');
+        ylabel('Number of pairs');
+        title(sprintf('Field %s (%s), %s axis', fieldNames(f), fieldKind(f), fieldAxes(a)));
+        grid on;
+        box on;
+    end
+    saveFigure(histFigs(a), fullfile(outFolder, sprintf('Magnification_Histograms_%s.png', fieldAxes(a))));
 end
-yline(magTarget, ':k', sprintf('M = %.2f', magTarget), 'LineWidth', 1, 'HandleVisibility', 'off');
+
+%% Figure: magnification by field (overview)
+figOverview = figure('Name', 'Magnification by Field', 'Color', 'w', 'Position', [140 140 1000 560]);
+hold on;
+dx = 0.012 * ((1:nAx) - (nAx + 1) / 2);              % small offset so the axes do not overlap
+hLeg = gobjects(0);
+for a = 1:nAx
+    xa = normFields + dx(a);
+    for f = 1:nF
+        plot([xa(f) xa(f)], [fieldStats(f, 3, a) fieldStats(f, 4, a)], '-', 'Color', axisColors(a, :), 'LineWidth', 0.8);
+        plot([xa(f) xa(f)], [fieldPct(f, iP1, a) fieldPct(f, iP99, a)], '-', 'Color', axisColors(a, :), 'LineWidth', 5);
+    end
+    hLeg(end + 1) = plot(xa, fieldStats(:, 1, a), 'o-', 'Color', axisColors(a, :), 'LineWidth', 1.5, ...
+        'MarkerFaceColor', 'w', 'MarkerSize', 7, 'DisplayName', sprintf('%s axis: mean', fieldAxes(a))); %#ok<SAGROW>
+    for f = 1:nF
+        text(xa(f) + 0.012, fieldStats(f, 1, a), sprintf('%.4f', fieldStats(f, 1, a)), 'FontSize', 8, ...
+            'Color', axisColors(a, :), 'VerticalAlignment', 'middle');
+    end
+end
+hLeg(end + 1) = plot(normFields, mNomField(:, 1), 'sk--', 'LineWidth', 1, 'DisplayName', 'Nominal pair');
+hLeg(end + 1) = plot(nan, nan, '-', 'Color', [0.4 0.4 0.4], 'LineWidth', 5, 'DisplayName', 'Thick bar: 1 % – 99 % of pairs');
+hLeg(end + 1) = plot(nan, nan, '-', 'Color', [0.4 0.4 0.4], 'LineWidth', 0.8, 'DisplayName', 'Thin bar: min – max');
+yline(magTarget, ':', 'Color', [0.8 0 0], 'LineWidth', 1.2, 'HandleVisibility', 'off');
 hold off;
-xlim([-0.03 1.03]);
-xlabel(fieldLabel);
+xlim([-0.06 1.1]);
+set(gca, 'XTick', normFields);
+xlabel(sprintf('Normalized field of %s (0 = on-axis)', sys(1).name));
 ylabel('Magnification M');
 title(sprintf('Magnification on-axis and off-axis (%d pairs, %g%% MTF yield sets)', nPairs, yieldPct));
-legend('Location', 'best');
+legend(hLeg, 'Location', 'best');
 grid on;
 box on;
-saveFigure(fig2, fullfile(outFolder, 'Magnification_by_Field.png'));
-
-%% Figure 3: change of magnification from on-axis
-fig3 = figure('Name', 'Magnification Change', 'Color', 'w', 'Position', [140 140 950 560]);
-hold on;
-for a = 1:nAx
-    fill([normFields, fliplr(normFields)], [changePct(:, 1, a).', fliplr(changePct(:, 2, a).')], axisColors(a, :), ...
-        'FaceAlpha', 0.18, 'EdgeColor', 'none', 'DisplayName', [axLabel(a) ': 1 % – 99 %']);
-    plot(normFields, changeStats(:, 3, a), ':', 'Color', axisColors(a, :), 'HandleVisibility', 'off');
-    plot(normFields, changeStats(:, 4, a), ':', 'Color', axisColors(a, :), 'DisplayName', [axLabel(a) ': min / max']);
-    plot(normFields, changeStats(:, 1, a), ['-' axisMarkers{a}], 'Color', axisColors(a, :), 'LineWidth', 1.6, ...
-        'MarkerFaceColor', axisColors(a, :), 'DisplayName', [axLabel(a) ': mean']);
-    plot(normFields, 100 * dDistNom(:, a), ['--' axisMarkers{a}], 'Color', 'k', 'LineWidth', 1.1, ...
-        'DisplayName', [axLabel(a) ': nominal pair']);
-end
-yline(0, ':k', 'HandleVisibility', 'off');
-hold off;
-xlim([-0.03 1.03]);
-xlabel(fieldLabel);
-ylabel('\DeltaM = M(h) / M(0) - 1  (%)');
-title('Change of magnification from on-axis (effect of distortion)');
-legend('Location', 'best');
-grid on;
-box on;
-saveFigure(fig3, fullfile(outFolder, 'Magnification_Change.png'));
-
-%% Figure 4: magnification histogram of every field, one panel per axis
-fig4 = figure('Name', 'Magnification Histograms', 'Color', 'w', 'Position', [160 60 950 300 + 300 * nAx]);
-mEdges = linspace(min(M(:)), max(M(:)), nHistBins + 1);
-for a = 1:nAx
-    subplot(nAx, 1, a);
-    hold on;
-    for f = 1:nF
-        mf = M(:, :, f, a);
-        histogram(mf(:), mEdges, 'DisplayStyle', 'stairs', 'EdgeColor', fieldColors(f, :), 'LineWidth', 1.6, ...
-            'DisplayName', sprintf('Field %s: mean %.4f, std %.4f', fieldNames(f), fieldStats(f, 1, a), ...
-            fieldStats(f, 2, a)));
-    end
-    if magTarget >= mEdges(1) && magTarget <= mEdges(end)
-        xline(magTarget, ':k', sprintf('M = %.2f', magTarget), 'HandleVisibility', 'off');
-    end
-    hold off;
-    xlabel('Magnification M');
-    ylabel('Number of pairs');
-    title(sprintf('Magnification distribution, %s', axLabel(a)));
-    legend('Location', 'best');
-    grid on;
-    box on;
-end
-saveFigure(fig4, fullfile(outFolder, 'Magnification_Histograms.png'));
-
-%% Figure 5: x - y asymmetry
-if hasAniso
-    fig5 = figure('Name', 'Axis Asymmetry', 'Color', 'w', 'Position', [180 180 950 560]);
-    hold on;
-    fill([normFields, fliplr(normFields)], [anisoStats(:, 3).', fliplr(anisoStats(:, 4).')], axisColors(2, :), ...
-        'FaceAlpha', 0.12, 'EdgeColor', 'none', 'DisplayName', 'All pairs min – max');
-    fill([normFields, fliplr(normFields)], [anisoStats(:, 5).', fliplr(anisoStats(:, 6).')], axisColors(2, :), ...
-        'FaceAlpha', 0.30, 'EdgeColor', 'none', 'DisplayName', 'All pairs 1 % – 99 %');
-    plot(normFields, anisoStats(:, 1), '-o', 'Color', axisColors(2, :), 'LineWidth', 1.6, ...
-        'MarkerFaceColor', axisColors(2, :), 'DisplayName', 'Mean of all pairs');
-    plot(normFields, anisoNom, '--sk', 'LineWidth', 1.1, 'DisplayName', 'Nominal pair');
-    yline(0, ':k', 'HandleVisibility', 'off');
-    hold off;
-    xlim([-0.03 1.03]);
-    xlabel(fieldLabel);
-    ylabel(sprintf('M_%s / M_%s - 1  (%%)', fieldAxes(2), fieldAxes(1)));
-    title(sprintf('Asymmetry between the %s and %s axes (tilt / decenter effect)', fieldAxes(2), fieldAxes(1)));
-    legend('Location', 'best');
-    grid on;
-    box on;
-    saveFigure(fig5, fullfile(outFolder, 'Axis_Asymmetry.png'));
-end
+saveFigure(figOverview, fullfile(outFolder, 'Magnification_by_Field.png'));
 
 %% Export Excel
-outputFile = fullfile(outFolder, 'Distortion_Magnification_Results.xlsx');
+outputFile = fullfile(outFolder, 'Magnification_by_Field_Results.xlsx');
 if isfile(outputFile)
     delete(outputFile);
 end
 fieldTag = @(h) strrep(sprintf('%.2f', h), '.', 'p');  % 0.70 -> "0p70" for column names
 
-summaryNames = ["Pairs (n1 x n2)"; sys(1).name + " files in yield set"; sys(2).name + " files in yield set"; ...
-    "c = k*p2/p1"; "Nominal M on-axis"; "Mean M on-axis"; "Std M on-axis"];
-summaryValues = [nPairs; n1; n2; magConst; mNomField(1, 1); fieldStats(1, 1, 1); fieldStats(1, 2, 1)];
-summaryUnits = ["count"; "count"; "count"; ""; ""; ""; ""];
-for a = 1:nAx
-    tag = " (" + fieldAxes(a) + " axis)";
-    summaryNames = [summaryNames; "Nominal M at full field" + tag; ...
-        "Nominal magnification change on-axis -> full field" + tag; "Mean M at full field" + tag; ...
-        "Std M at full field" + tag; "Mean dM at full field" + tag; ...
-        "Nominal distortion " + sys(1).name + " at full field" + tag; ...
-        "Nominal distortion " + sys(2).name + " at full field" + tag; ...
-        "Largest OLED height reached / largest sampled height - 1" + tag]; %#ok<AGROW>
-    summaryValues = [summaryValues; mNomField(end, a); 100 * dDistNom(end, a); fieldStats(end, 1, a); ...
-        fieldStats(end, 2, a); changeStats(end, 1, a); 100 * sys(1).nominal.D(1, end, a); ...
-        100 * sys(2).nominal.D(1, end, a); extrapPct(a)]; %#ok<AGROW>
-    summaryUnits = [summaryUnits; ""; "%"; ""; ""; "%"; "%"; "%"; "%"]; %#ok<AGROW>
-end
-if hasAniso
-    summaryNames = [summaryNames; "Asymmetry M_x/M_y - 1 at full field: nominal"; ...
-        "Asymmetry at full field: mean"; "Asymmetry at full field: std"; ...
-        "Asymmetry at full field: min"; "Asymmetry at full field: max"];
-    summaryValues = [summaryValues; anisoNom(end); anisoStats(end, 1); anisoStats(end, 2); ...
-        anisoStats(end, 3); anisoStats(end, 4)];
-    summaryUnits = [summaryUnits; "%"; "%"; "%"; "%"; "%"];
-end
-summaryNames = [summaryNames; "Max f_2(y) fit error"];
-summaryValues = [summaryValues; max(fitErr2(:))];
-summaryUnits = [summaryUnits; "mm"];
-writetable(table(summaryNames, summaryValues, summaryUnits, 'VariableNames', {'Parameter', 'Value', 'Unit'}), ...
-    outputFile, 'Sheet', 'Summary');
-
 [FF, AA] = ndgrid(1:nF, 1:nAx);
-fsT = table(fieldAxes(AA(:)).', normFields(FF(:)).', 'VariableNames', {'Axis', 'NormField'});
-fsT.Nominal_detector_height_mm = reshape(sys(1).nominal.yH(1, :, :), [], 1);
-fsT.Nominal_OLED_height_mm = yoNom(:);
-fsT.Nominal_M = mNomField(:);
+statT = table(fieldAxes(AA(:)).', normFields(FF(:)).', fieldKind(FF(:)).', 'VariableNames', {'Axis', 'NormField', 'Type'});
 mS = reshape(permute(fieldStats, [1 3 2]), [], 4);
-cS = reshape(permute(changeStats, [1 3 2]), [], 4);
-fsT.Mean_M = mS(:, 1); fsT.Std_M = mS(:, 2); fsT.Min_M = mS(:, 3); fsT.Max_M = mS(:, 4);
-fsT.Nominal_dM_pct = 100 * dDistNom(:);
-fsT.Mean_dM_pct = cS(:, 1); fsT.Std_dM_pct = cS(:, 2); fsT.Min_dM_pct = cS(:, 3); fsT.Max_dM_pct = cS(:, 4);
-writetable(fsT, outputFile, 'Sheet', 'Field Stats');
-
-pctTable = table(pctLevels(:), 'VariableNames', {'Percentile'});
-for a = 1:nAx
-    for f = 1:nF
-        pctTable.(['M_' char(fieldAxes(a)) '_field_' fieldTag(normFields(f))]) = fieldPct(f, :, a).';
-    end
+pS = reshape(permute(fieldPct, [1 3 2]), [], nP);
+statT.Nominal_M = mNomField(:);
+statT.Mean_M = mS(:, 1);
+statT.Std_M = mS(:, 2);
+statT.Min_M = mS(:, 3);
+statT.Max_M = mS(:, 4);
+for k = 1:nP
+    statT.(sprintf('P%g_M', pctLevels(k))) = pS(:, k);
 end
-writetable(pctTable, outputFile, 'Sheet', 'Percentiles');
-
-distTable = table(fieldAxes(AA(:)).', normFields(FF(:)).', 'VariableNames', {'Axis', 'NormField'});
-for s = 1:2
-    Dy = 100 * sys(s).D(sys(s).inYield, :, :);           % nYield x nF x nAx
-    Dy = reshape(permute(Dy, [2 3 1]), nF * nAx, []);   % (field, axis) x file
-    distTable.(char(sys(s).name + "_nominal_pct")) = reshape(100 * sys(s).nominal.D(1, :, :), [], 1);
-    distTable.(char(sys(s).name + "_mean_pct")) = mean(Dy, 2);
-    distTable.(char(sys(s).name + "_std_pct")) = std(Dy, 0, 2);
-    distTable.(char(sys(s).name + "_min_pct")) = min(Dy, [], 2);
-    distTable.(char(sys(s).name + "_max_pct")) = max(Dy, [], 2);
-    distTable.(char(sys(s).name + "_nominal_height_mm")) = reshape(sys(s).nominal.yH(1, :, :), [], 1);
-end
-writetable(distTable, outputFile, 'Sheet', 'Distortion');
-
-if hasAniso
-    writetable(table(normFields(:), anisoNom, anisoStats(:, 1), anisoStats(:, 2), anisoStats(:, 3), ...
-        anisoStats(:, 4), anisoStats(:, 5), anisoStats(:, 6), 'VariableNames', {'NormField', 'Nominal_pct', ...
-        'Mean_pct', 'Std_pct', 'Min_pct', 'Max_pct', 'P1_pct', 'P99_pct'}), outputFile, 'Sheet', 'Axis Asymmetry');
-end
+writetable(statT, outputFile, 'Sheet', 'Magnification');
 
 for s = 1:2
     fileTable = table(sys(s).fileNames, sys(s).EFL, sys(s).mtfMetric, sys(s).mtfRank, sys(s).inYield, ...
         'VariableNames', {'FileName', 'EFL_paraxial_abs_mm', 'MTF_criterion', 'MTF_rank', 'InYieldSet'});
-    for a = 1:nAx
-        for f = 1:nF
-            fileTable.(['fEff_' char(fieldAxes(a)) '_' fieldTag(normFields(f)) '_mm']) = sys(s).fEff(:, f, a);
-        end
-    end
-    for a = 1:nAx
-        for f = 1:nF
-            fileTable.(['Distortion_' char(fieldAxes(a)) '_' fieldTag(normFields(f)) '_pct']) = 100 * sys(s).D(:, f, a);
-        end
-    end
     writetable(fileTable, outputFile, 'Sheet', char(sys(s).name + " Files"));
 end
 
@@ -544,25 +384,12 @@ if writePairsSheet
     if nPairs <= 1048575
         fprintf('Writing %d pairs to the "Pairs" sheet (this can take a few minutes)...\n', nPairs);
         [I, J] = ndgrid(1:n1, 1:n2);
-        pairTable = table(names1(I(:)), names2(J(:)), E1(I(:)), E2(J(:)), ...
-            'VariableNames', {char("File_" + sys(1).name), char("File_" + sys(2).name), ...
-            char("EFL_" + sys(1).name + "_mm"), char("EFL_" + sys(2).name + "_mm")});
+        pairTable = table(names1(I(:)), names2(J(:)), ...
+            'VariableNames', {char("File_" + sys(1).name), char("File_" + sys(2).name)});
         for a = 1:nAx
             for f = 1:nF
                 mf = M(:, :, f, a);
                 pairTable.(['M_' char(fieldAxes(a)) '_' fieldTag(normFields(f))]) = mf(:);
-            end
-        end
-        for a = 1:nAx
-            for f = 2:nF
-                df = dM(:, :, f, a);
-                pairTable.(['dM_' char(fieldAxes(a)) '_' fieldTag(normFields(f)) '_pct']) = df(:);
-            end
-        end
-        if hasAniso
-            for f = 2:nF
-                af = aniso(:, :, f);
-                pairTable.(['Asym_' fieldTag(normFields(f)) '_pct']) = af(:);
             end
         end
         writetable(pairTable, outputFile, 'Sheet', 'Pairs');
@@ -571,33 +398,23 @@ if writePairsSheet
     end
 end
 
-settingNames = ["System 1"; "System 1 folder"; "System 1 nominal file"; "System 1 afocal"; ...
-    "System 1 MTF frequency (cyc/mm)"; "System 1 MTF threshold"; "System 1 MTF fields"; ...
-    "System 2"; "System 2 folder"; "System 2 nominal file"; "System 2 afocal"; ...
-    "System 2 MTF frequency (cyc/mm)"; "System 2 MTF threshold"; "System 2 MTF fields"; ...
-    "File prefix"; "Yield level (%)"; "MTF frequency (fraction of Nyquist)"; "Pixel pitch (um)"; ...
-    "Pixels"; "Pixel scale k"; "c = k*p2/p1"; "Normalized fields"; "Field axes"; "Magnification formula"];
-settingValues = strings(numel(settingNames), 1);
-for s = 1:2
-    o = (s - 1) * 7;
-    settingValues(o + (1:7)) = [sys(s).name; string(sys(s).folder); string(sys(s).nominalName); ...
-        string(sys(s).isAfocal); string(sys(s).mtfFreq); string(sys(s).threshold); fieldText(mtfFields{s})];
-end
-settingValues(15:end) = [string(filePrefix); string(yieldPct); string(mtfFreqFrac); ...
-    strjoin(string(pixelPitch_um), " / "); strjoin(string(nPixels), " / "); string(pixelScale); ...
-    string(magConst); strjoin(fieldNames, ", "); strjoin(fieldAxes, ", "); ...
-    "M(h) = c * f1_eff(h) / f2(c * y1(h)),  f2(y) = EFL2 + a*y^2 + b*y^4,  f_eff from the on-axis chief ray"];
+settingNames = ["System 1 folder"; "System 1 nominal file"; "System 1 valid / yield files"; ...
+    "System 2 folder"; "System 2 nominal file"; "System 2 valid / yield files"; ...
+    "Yield level (%)"; "c = k*p2/p1"; "Normalized fields"; "Field axes"];
+settingValues = [string(sys(1).folder); string(sys(1).nominalName); ...
+    sprintf('%d / %d', sum(sys(1).valid), n1); string(sys(2).folder); string(sys(2).nominalName); ...
+    sprintf('%d / %d', sum(sys(2).valid), n2); string(yieldPct); string(magConst); ...
+    strjoin(fieldNames, ", "); strjoin(fieldAxes, ", ")];
 writetable(table(settingNames, settingValues, 'VariableNames', {'Parameter', 'Value'}), ...
     outputFile, 'Sheet', 'Settings');
 
 %% Save raw data
-save(fullfile(outFolder, 'Distortion_Magnification_Data.mat'), 'sys', 'names1', 'names2', 'M', 'dM', ...
-    'normFields', 'fieldAxes', 'fieldStats', 'fieldPct', 'changeStats', 'mNomField', 'coef2', 'magConst', ...
-    'yieldPct', 'mtfFreqFrac', 'pixelPitch_um', 'nPixels', 'pixelScale', '-v7.3');
+save(fullfile(outFolder, 'Magnification_by_Field_Data.mat'), 'names1', 'names2', 'M', 'normFields', ...
+    'fieldAxes', 'fieldStats', 'fieldPct', 'pctLevels', 'mNomField', 'magConst', 'yieldPct', '-v7.3');
 
 %% PDF report (A4)
-pdfFile = fullfile(outFolder, 'Distortion_Magnification_Report.pdf');
-oldPages = dir(fullfile(outFolder, 'Distortion_Magnification_Report_page*.pdf'));
+pdfFile = fullfile(outFolder, 'Magnification_by_Field_Report.pdf');
+oldPages = dir(fullfile(outFolder, 'Magnification_by_Field_Report_page*.pdf'));
 for i = 1:numel(oldPages)
     delete(fullfile(outFolder, oldPages(i).name));
 end
@@ -605,205 +422,97 @@ if isfile(pdfFile)
     delete(pdfFile);
 end
 if isfile(pdfFile)   % still open in a PDF viewer
-    pdfFile = fullfile(outFolder, ['Distortion_Magnification_Report_' ...
+    pdfFile = fullfile(outFolder, ['Magnification_by_Field_Report_' ...
         char(datetime('now', 'Format', 'yyyyMMdd_HHmmss')) '.pdf']);
     fprintf('\nThe old report is open in another program; new report: %s\n', pdfFile);
 end
 
 n1Name = char(sys(1).name);
 n2Name = char(sys(2).name);
-axisList = strjoin(fieldAxes, ' ve ');
-modeText = ["nesne sonsuzda: y = görüntüde REAY/REAX, açı = nesne uzayında REAB/REAC, REAA/REAC", ...
-            "afokal: y = nesnede (OLED) REAY/REAX, açı = görüntü uzayında REAB/REAC, REAA/REAC"];
 
-% --- Page: summary -------------------------------------------------------
+% --- Page: results -------------------------------------------------------
 summaryLines = {
-    sprintf('Tarih:                 %s', char(datetime('now', 'Format', 'dd.MM.yyyy HH:mm')))
-    sprintf('Alanlar (%s):        %s  (0 = on-axis), eksenler: %s', n1Name, strjoin(fieldNames, ', '), axisList)
-    sprintf('c = k × p2 / p1:       %g × %.2f / %.2f = %.6f', pixelScale, pixelPitch_um(2), pixelPitch_um(1), magConst)
-    sprintf('Yield seviyesi:        %%%g  (MTF, Nyquist × %g)', yieldPct, mtfFreqFrac)
-    sprintf('Çift sayısı:           %d × %d = %d', n1, n2, nPairs)
+    sprintf('Tarih:        %s', char(datetime('now', 'Format', 'dd.MM.yyyy HH:mm')))
+    sprintf('%s:         %s  (%d / %d dosya %%%g MTF yield kümesinde)', n1Name, sys(1).nominalName, n1, ...
+        numel(sys(1).fileNames), yieldPct)
+    sprintf('%s:         %s  (%d / %d dosya %%%g MTF yield kümesinde)', n2Name, sys(2).nominalName, n2, ...
+        numel(sys(2).fileNames), yieldPct)
+    sprintf('Çift sayısı:  %d × %d = %d  (her %s her %s ile)', n1, n2, nPairs, n1Name, n2Name)
     ''
     };
-for s = 1:2
-    summaryLines = [summaryLines; {
-        sprintf('SİSTEM %d – %s', s, sys(s).name)
-        sprintf('  Klasör:              %s', sys(s).folder)
-        sprintf('  Nominal dosya:       %s   |EFL| = %.4f mm', sys(s).nominalName, sys(s).nominal.EFL)
-        sprintf('  Okuma:               %s', modeText(sys(s).isAfocal + 1))
-        sprintf('  Dosyalar:            %d MC, %d geçerli, %d yield kümesinde', ...
-            numel(sys(s).fileNames), sum(sys(s).valid), sum(sys(s).inYield))
-        }]; %#ok<AGROW>
-    for a = 1:nAx
-        summaryLines{end + 1, 1} = sprintf('  Nominal dist. (%s):  %s', fieldAxes(a), ...
-            strjoin(compose("%s: %+.3f%%", fieldNames(:), 100 * sys(s).nominal.D(1, :, a).').', ', ')); %#ok<SAGROW>
-    end
-    summaryLines{end + 1, 1} = ''; %#ok<SAGROW>
-end
 for a = 1:nAx
     summaryLines = [summaryLines; {
-        sprintf('BÜYÜTME M – %s EKSENİ (tüm çiftler)', upper(fieldAxes(a)))
-        '  Alan   Nominal M   Ort. M     Std M     Min M     Max M     ΔM ort. %'
+        sprintf('BÜYÜTME M – %s EKSENİ', upper(fieldAxes(a)))
+        '  Alan              Nominal   Ortalama   Std       Min       Max       %1        %99'
         }]; %#ok<AGROW>
     for f = 1:nF
-        summaryLines{end + 1, 1} = sprintf('  %-5s  %9.5f  %9.5f  %8.5f  %8.5f  %8.5f  %+8.3f', fieldNames(f), ...
-            mNomField(f, a), fieldStats(f, 1, a), fieldStats(f, 2, a), fieldStats(f, 3, a), fieldStats(f, 4, a), ...
-            changeStats(f, 1, a)); %#ok<SAGROW>
+        summaryLines{end + 1, 1} = sprintf('  %-5s %-10s  %8.5f  %8.5f  %7.5f  %8.5f  %8.5f  %8.5f  %8.5f', ...
+            fieldNames(f), char(fieldKind(f)), mNomField(f, a), fieldStats(f, 1, a), fieldStats(f, 2, a), ...
+            fieldStats(f, 3, a), fieldStats(f, 4, a), fieldPct(f, iP1, a), fieldPct(f, iP99, a)); %#ok<SAGROW>
     end
     summaryLines{end + 1, 1} = ''; %#ok<SAGROW>
 end
-if hasAniso
-    summaryLines = [summaryLines; {
-        sprintf('ASİMETRİ M_%s / M_%s − 1 (%%)', fieldAxes(2), fieldAxes(1))
-        '  Alan   Nominal    Ortalama   Std       Min        Max'
-        }];
-    for f = 2:nF
-        summaryLines{end + 1, 1} = sprintf('  %-5s  %+8.4f  %+9.4f  %8.4f  %+9.4f  %+9.4f', fieldNames(f), ...
-            anisoNom(f), anisoStats(f, 1), anisoStats(f, 2), anisoStats(f, 3), anisoStats(f, 4)); %#ok<SAGROW>
-    end
-end
-summaryFig = textPage('DİSTORSİYONLU BÜYÜTME ANALİZ RAPORU', summaryLines, 'Courier New', 7.5);
-
-% --- Page: assessment ----------------------------------------------------
-assess = {'ON-AXIS VE OFF-AXIS BÜYÜTME'};
-assess{end + 1, 1} = sprintf(['%%%g MTF yield kümelerindeki %d çiftin on-axis büyütmesi ortalama %.5f (std %.5f, ' ...
-    '%.5f – %.5f).'], yieldPct, nPairs, fieldStats(1, 1, 1), fieldStats(1, 2, 1), fieldStats(1, 3, 1), fieldStats(1, 4, 1));
-for a = 1:nAx
-    assess{end + 1, 1} = sprintf(['•  %s ekseni, tam alan (%s): ortalama %.5f (std %.5f, %.5f – %.5f); on-axis''e göre ' ...
-        'ortalama değişim %+.3f %%, çiftler arasında %+.3f %% ile %+.3f %% arası.'], fieldAxes(a), fieldNames(end), ...
-        fieldStats(end, 1, a), fieldStats(end, 2, a), fieldStats(end, 3, a), fieldStats(end, 4, a), ...
-        changeStats(end, 1, a), changeStats(end, 3, a), changeStats(end, 4, a)); %#ok<SAGROW>
-end
-assess = [assess; {''; 'NOMİNAL DİSTORSİYONUN ETKİSİ'}];
-assess{end + 1, 1} = sprintf(['Tam alanda nominal distorsiyon (%s ekseni): %s %+.3f %%, %s %+.3f %%. Nominal çiftin ' ...
-    'büyütmesi on-axis %.5f, tam alanda %.5f; distorsiyon tam alanda büyütmeyi %+.3f %% değiştiriyor.'], ...
-    fieldAxes(1), n1Name, 100 * sys(1).nominal.D(1, end, 1), n2Name, 100 * sys(2).nominal.D(1, end, 1), ...
-    mNomField(1, 1), mNomField(end, 1), 100 * dDistNom(end, 1));
-if sign(sys(1).nominal.D(1, end, 1)) == sign(sys(2).nominal.D(1, end, 1)) && sys(1).nominal.D(1, end, 1) ~= 0
-    assess{end + 1, 1} = ['İki sistemin distorsiyonu aynı işaretli; büyütmede birbirini kısmen götürüyor. ' ...
-        'Off-axis büyütmeyi belirleyen iki distorsiyonun farkıdır.'];
-else
-    assess{end + 1, 1} = ['İki sistemin distorsiyonu zıt işaretli; büyütmedeki etkileri toplanıyor. ' ...
-        'Distorsiyonların eşleştirilmesi (aynı işaret ve büyüklük) off-axis büyütme farkını azaltır.'];
-end
-assess = [assess; {''; 'TOLERANSLARIN ETKİSİ'}];
-assess{end + 1, 1} = sprintf(['Ortalama ΔM (%s, tam alan) %+.3f %%: bu kısım nominal distorsiyon farkından gelir ve tüm ' ...
-    'ürünlerde aynıdır; tasarımda veya görüntü işlemede düzeltilebilir. ΔM''nin çiftler arasındaki std''si %.3f %%: ' ...
-    'toleransların distorsiyonu dosyadan dosyaya değiştirmesinden gelir ve ürüne özeldir.'], fieldAxes(1), ...
-    changeStats(end, 1, 1), changeStats(end, 2, 1));
-if hasAniso
-    assess = [assess; {''; sprintf('%s – %s ASİMETRİSİ (TILT / DECENTER)', upper(fieldAxes(2)), upper(fieldAxes(1)))}];
-    assess{end + 1, 1} = sprintf(['Nominal tasarım simetrik olduğu için nominal çiftte asimetri %+.4f %%. Toleranslı ' ...
-        'çiftlerde tam alanda M_%s / M_%s − 1 ortalama %+.4f %%, std %.4f %%, %+.4f %% ile %+.4f %% arası (%%1 – %%99: ' ...
-        '%+.4f %% … %+.4f %%). Bu fark tilt ve decenter toleranslarının görüntüyü bir yönde diğerinden farklı ' ...
-        'büyütmesinden gelir.'], anisoNom(end), fieldAxes(2), fieldAxes(1), anisoStats(end, 1), anisoStats(end, 2), ...
-        anisoStats(end, 3), anisoStats(end, 4), anisoStats(end, 5), anisoStats(end, 6));
-end
-assess = [assess; {
-    ''
-    'KONTROL'
-    ['Okunan nominal distorsiyonu, nominal dosyalarda OpticStudio''nun Field Curvature / Distortion analizindeki ' ...
-     'F-Tan(Theta) distorsiyonuyla karşılaştırın (özet sayfasında her alan ve eksen için verilmiştir).']
+summaryLines = [summaryLines; {
+    'TABLO NASIL OKUNUR'
+    '  Alan      : 0 = görüntünün ortası (on-axis), 1 = görüntünün kenarı.'
+    '  Nominal   : nominal MWIR + nominal kolimatör çiftinin büyütmesi.'
+    '  Ortalama  : tüm çiftlerin büyütmesinin ortalaması.'
+    '  Std       : çiftler arasındaki saçılım (standart sapma).'
+    '  Min / Max : en küçük ve en büyük büyütme.'
+    '  %1 / %99  : çiftlerin %98''i bu iki değerin arasındadır.'
     }];
-if any(extrapPct > 2)
-    assess{end + 1, 1} = sprintf(['UYARI: %s''ın tam alanı OLED''de, %s''in örneklenen en büyük yüksekliğinin %%%.1f ' ...
-        'üzerine çıkıyor; orada kolimatörün etkin EFL''si uyum eğrisinden dışarı doğru tahmin edildi.'], ...
-        n1Name, n2Name, max(extrapPct));
-end
-if min(n1, n2) < 50
-    assess = [assess; {''; 'UYARI – ÖRNEKLEM BÜYÜKLÜĞÜ'}];
-    assess{end + 1, 1} = sprintf(['Yield kümelerinde %d ve %d dosya var; istatistiklerin güvenilirliği çift ' ...
-        'sayısıyla değil dosya sayısıyla sınırlıdır. Sistem başına en az 50 – 100 MC dosyası önerilir.'], n1, n2);
-end
-assessFig = textPage('1. DEĞERLENDİRME', assess, 'Arial', 9.5);
+summaryFig = textPage('ALANA GÖRE BÜYÜTME – SONUÇLAR', summaryLines, 'Courier New', 8);
 
-% --- Page: method --------------------------------------------------------
-method = {
-    'NEDEN DİSTORSİYON?'
-    ['Paraksiyel EFL yalnızca on-axis büyütmeyi verir. Distorsiyonlu bir sistemde gerçek görüntü yüksekliği ' ...
-     'y = f · tan θ · (1 + D(θ)) olur; bu yüzden büyütme alan boyunca değişir: M(θ) ≈ M(0) × (1 + D_1 − D_2).']
+% --- Page: how to read ---------------------------------------------------
+readText = {
+    'NE HESAPLANDI?'
+    sprintf(['%%%g MTF yield kümelerindeki her %s, her %s ile eşleştirildi (%d çift). Her çiftin büyütmesi ' ...
+     'görüntünün ortasında (alan 0, on-axis) ve kenara doğru (alan %s, off-axis) ayrı ayrı hesaplandı. ' ...
+     'Kenardaki büyütme, lenslerin distorsiyonunun etkisini de içerir; ortadaki büyütme EFL oranından gelir.'], ...
+     yieldPct, n1Name, n2Name, nPairs, strjoin(fieldNames(2:end), ', '))
+    sprintf('Eksenler: %s (görüntünün dikey ve yatay yönü).', strjoin(fieldAxes, ', '))
     ''
-    'ADIM 1 – ETKİN EFL (İKİ EKSEN)'
-    sprintf(['Her MC dosyasında normalize alanlarda (%s) ve %s eksenlerinde birincil dalga boyunda gerçek ana ışın ' ...
-     'izlenir (y ekseni: Hx = 0, Hy = h, REAY ve REAB / REAC; x ekseni: Hx = h, Hy = 0, REAX ve REAA / REAC). ' ...
-     'Toleranslı dosyalarda tilt / decenter on-axis ana ışını da eksenden kaydırır (boresight); bu kayma büyütmeyi ' ...
-     'değiştirmediği için etkin EFL on-axis ana ışına göre farkla hesaplanır: ' ...
-     'f_eff(h) = |y(h) − y(0)| / |tan θ(h) − tan θ(0)|. Nesnesi sonsuzda olan dosyada y görüntü yüzeyinde, açı ' ...
-     'nesne uzayında; afokal dosyada (nesne = OLED) y nesne yüzeyinde, açı görüntü uzayında okunur. On-axis''te ' ...
-     'paraksiyel EFL (EFFL) kullanılır. Distorsiyon D(h) = f_eff(h) / EFL − 1''dir.'], strjoin(fieldNames, ', '), axisList)
+    'HİSTOGRAMLAR NASIL OKUNUR?'
+    ['•  Her panel bir alandır. Çubuklar, büyütmesi o aralıkta olan çift sayısını gösterir. Bütün panellerde yatay ' ...
+     'eksen aynıdır; böylece paneller doğrudan karşılaştırılabilir.']
+    '•  Siyah düz çizgi: ortalama. Siyah kesikli çizgi: nominal çift. Kırmızı noktalı çizgi: M = 1.'
+    '•  Gri gölge: çiftlerin %98''inin bulunduğu aralık (%1 – %99).'
+    '•  Sağ üstteki kutuda sayısal değerler vardır.'
     ''
-    'ADIM 2 – YIELD KÜMELERİ'
-    sprintf(['Her sistemde MTF''e göre en iyi %%%g dosya seçilir. Alan ışınları izlenemeyen dosyalar geçersiz ' ...
-     'sayılır.'], yieldPct)
+    'ÖZET GRAFİK NASIL OKUNUR?'
+    ['•  Yatay eksen alan (0 = orta, 1 = kenar). Her alan için daire ortalamayı, kalın çubuk çiftlerin %98''ini, ' ...
+     'ince çubuk en küçük – en büyük değeri gösterir. Her renk bir eksendir.']
     ''
-    'ADIM 3 – ALANA GÖRE BÜYÜTME'
-    sprintf(['Her eksen için ayrı: %s''ın h alanında dedektördeki yükseklik y_1(h) OLED''e c = %.6f ölçeğiyle basılır: ' ...
-     'y_OLED = c × y_1(h). %s''in aynı eksendeki alan noktalarından her dosya için f_2(y) = EFL_2 + a·y² + b·y⁴ ' ...
-     'eğrisi uydurulur. Büyütme M(h) = c × f_1,eff(h) / f_2(y_OLED)''dir.'], n1Name, magConst, n2Name)
-    ''
-    'ADIM 4 – ÇAPRAZLAMA VE ASİMETRİ'
-    sprintf(['%s yield kümesindeki her dosya %s yield kümesindeki her dosyayla eşleştirilir (%d × %d = %d çift). Her ' ...
-     'çift, alan ve eksen için büyütme; on-axis''e göre değişim ΔM(h) = M(h) / M(0) − 1 ve aynı çiftin iki eksen ' ...
-     'arasındaki farkı (asimetri) M_x / M_y − 1 hesaplanır.'], n1Name, n2Name, n1, n2, nPairs)
-    ''
-    'VARSAYIMLAR'
-    ['•  Her eksende alanın yalnız pozitif tarafı örneklenir. Ana ışın birincil dalga boyunda izlenir; lateral ' ...
-     'renk dahil değildir. Görüntü işlemede distorsiyon düzeltmesi yapılmadığı ve MWIR''ın x / y eksenlerinin ' ...
-     'OLED''in x / y eksenlerine karşılık geldiği varsayılır.']
+    'NELERE BAKMALI?'
+    ['•  Ortalamanın alanla değişimi: ortadan kenara ortalama büyütme ne kadar değişiyor? Bu değişim bütün ' ...
+     'ürünlerde aynıdır (tasarımdan gelir).']
+    ['•  Dağılımın genişliği (std, %1 – %99): üründen ürüne ne kadar fark var? Kenarda genişliyorsa toleranslar ' ...
+     'kenardaki büyütmeyi ortadakinden daha çok oynatıyor demektir.']
+    ['•  İki eksenin karşılaştırması: aynı alanda y ve x büyütmeleri farklıysa görüntü bir yönde diğerinden ' ...
+     'farklı büyütülüyor demektir (tilt / decenter toleranslarından).']
     };
-methodFig = textPage('2. YÖNTEM', method, 'Arial', 9.5);
+if min(n1, n2) < 50
+    readText = [readText; {''; sprintf(['UYARI: Yield kümelerinde %d ve %d dosya var; istatistikler dosya sayısıyla ' ...
+        'sınırlıdır. Sistem başına en az 50 – 100 MC dosyası önerilir.'], n1, n2)}];
+end
+readFig = textPage('SONUÇLAR NASIL OKUNUR?', readText, 'Arial', 10);
 
 % --- Figure pages --------------------------------------------------------
-plotFigs = figurePage(fig2, '3. ON-AXIS VE OFF-AXIS BÜYÜTME', {
-    'NASIL OKUNUR'
-    sprintf(['•  Yatay eksen %s''ın normalize alanıdır (0 = on-axis). Her renk bir eksendir (%s). Kalın çizgi tüm ' ...
-     'çiftlerin ortalaması, renkli bant çiftlerin %%1 – %%99''u, noktalı çizgiler en küçük ve en büyük değer, ' ...
-     'siyah kesikli çizgi nominal çifttir.'], n1Name, axisList)
-    'NASIL YORUMLANIR'
-    ['•  Ortalama çizginin on-axis''ten kenara eğimi distorsiyon farkının etkisidir. İki eksenin ortalamaları ' ...
-     'ayrışıyorsa toleranslar ortalamada bir yönü diğerinden farklı etkiliyordur.']
+plotFigs = figurePage(figOverview, 'ÖZET: ALANA GÖRE BÜYÜTME', {
+    '•  Daire: ortalama (değeri yanında yazılı). Kalın çubuk: çiftlerin %98''i. İnce çubuk: en küçük – en büyük.'
+    '•  Siyah kesikli çizgi: nominal çift. Kırmızı noktalı çizgi: M = 1.'
     }, false);
-plotFigs(end + 1, 1) = figurePage(fig3, '4. ON-AXIS''E GÖRE BÜYÜTME DEĞİŞİMİ', {
-    'NASIL OKUNUR'
-    ['•  Her çiftin off-axis büyütmesinin kendi on-axis büyütmesine göre yüzde değişimidir: ' ...
-     'ΔM(h) = M(h) / M(0) − 1. EFL saçılımını ayıklar ve yalnız distorsiyonun etkisini gösterir.']
-    'NASIL YORUMLANIR'
-    ['•  Ortalama çizgi nominal distorsiyon farkını, bant genişliği toleransların distorsiyona etkisini verir. ' ...
-     'Örneğin tam alanda ortalama −%0.8 ise on-axis büyütmesi 1.000 olan ürünün kenarda büyütmesi ≈ 0.992''dir.']
-    }, false);
-if hasAniso
-    plotFigs(end + 1, 1) = figurePage(fig5, sprintf('5. %s – %s ASİMETRİSİ', upper(fieldAxes(2)), upper(fieldAxes(1))), {
-        'NASIL OKUNUR'
-        sprintf(['•  Aynı çiftin aynı alanda %s eksenindeki büyütmesinin %s eksenindekine oranı − 1 (%%). Nominal ' ...
-         'simetrik tasarımda sıfırdır; on-axis''te tanım gereği sıfırdır.'], fieldAxes(2), fieldAxes(1))
-        'NASIL YORUMLANIR'
-        ['•  Bant genişliği tilt / decenter toleranslarının yarattığı asimetridir: görüntü bir yönde diğerinden ' ...
-         'farklı büyütülür (örneğin bir kare hafif dikdörtgen görünür). Bu ürüne özeldir.']
-        ['•  Ortalama sıfırdan belirgin uzaksa toleranslar sistematik olarak bir yönü tercih ediyordur ' ...
-         '(örneğin yalnız bir eksende tanımlı tilt toleransları).']
-        }, false);
+for a = 1:nAx
+    plotFigs(end + 1, 1) = figurePage(histFigs(a), sprintf('BÜYÜTME DAĞILIMI – %s EKSENİ', upper(fieldAxes(a))), {
+        '•  Her panel bir alan. Çubuklar: o büyütmedeki çift sayısı. Siyah düz çizgi: ortalama.'
+        '•  Siyah kesikli: nominal çift. Kırmızı noktalı: M = 1. Gri gölge: çiftlerin %98''i (%1 – %99).'
+        }, false); %#ok<AGROW>
 end
-plotFigs(end + 1, 1) = figurePage(fig4, sprintf('%d. ALANLARIN BÜYÜTME DAĞILIMI', 4 + hasAniso + 1), {
-    'NASIL OKUNUR'
-    '•  Her panel bir eksen, her renkli basamak çizgisi bir alanın büyütme dağılımıdır (tüm çiftler).'
-    'NASIL YORUMLANIR'
-    ['•  Off-axis dağılımları on-axis''e göre kaymışsa sebep nominal distorsiyon farkıdır; genişlemişse sebep ' ...
-     'toleransların distorsiyona etkisidir.']
-    }, false);
-plotFigs(end + 1, 1) = figurePage(fig1, sprintf('%d. ALANA GÖRE DİSTORSİYON', 4 + hasAniso + 2), {
-    'NASIL OKUNUR'
-    ['•  Her panel bir sistemdir; her renk bir eksen. Kalın çizgi yield kümesinin ortalaması, renkli bant en küçük ' ...
-     've en büyük değer, siyah kesikli çizgi nominal tasarımdır (her eksen kendi işaretiyle).']
-    'NASIL YORUMLANIR'
-    ['•  İki sistemin tam alandaki nominal distorsiyonları aynı işaretli ve yakın büyüklükteyse büyütmeye ' ...
-     'etkileri birbirini götürür; zıt işaretliyse toplanır. Bantların genişliği toleransların etkisidir.']
-    }, false);
 
 % --- Assemble pages ------------------------------------------------------
-allFigs = [summaryFig; assessFig; methodFig; plotFigs];
+allFigs = [summaryFig; readFig; plotFigs];
 nPages = numel(allFigs);
-headerText = sprintf('Distorsiyonlu Büyütme Analizi  |  %s: %s  |  %s: %s', ...
-    n1Name, sys(1).nominalName, n2Name, sys(2).nominalName);
+headerText = sprintf('Alana Göre Büyütme  |  %s: %s  |  %s: %s', n1Name, sys(1).nominalName, n2Name, sys(2).nominalName);
 for p = 1:nPages
     addPageFrame(allFigs(p), headerText, p, nPages);
 end
@@ -820,7 +529,7 @@ catch pdfErr
         delete(pdfFile);
     end
     for p = 1:nPages
-        print(allFigs(p), fullfile(outFolder, sprintf('Distortion_Magnification_Report_page%d.pdf', p)), '-dpdf');
+        print(allFigs(p), fullfile(outFolder, sprintf('Magnification_by_Field_Report_page%d.pdf', p)), '-dpdf');
     end
     fprintf('Report saved as separate pages.\n');
 end
@@ -830,10 +539,8 @@ close(allFigs);
 summaryFile = fullfile(outFolder, 'Analysis_Summary.txt');
 fid = fopen(summaryFile, 'w', 'n', 'UTF-8');
 if fid > 0
-    fprintf(fid, '%s\r\n', 'DİSTORSİYONLU BÜYÜTME ANALİZ ÖZETİ', '');
+    fprintf(fid, '%s\r\n', 'ALANA GÖRE BÜYÜTME – SONUÇLAR', '');
     fprintf(fid, '%s\r\n', summaryLines{:});
-    fprintf(fid, '\r\n%s\r\n\r\n', 'DEĞERLENDİRME');
-    fprintf(fid, '%s\r\n', assess{:});
     fclose(fid);
 end
 
@@ -1127,25 +834,37 @@ annotation(fig, 'textbox', [0.08 0.06 0.84 0.83], 'String', lines, ...
 end
 
 function fig = figurePage(srcFig, titleText, captionLines, squareAxes)
-% A4 page: title, the axes of srcFig (copied with their legends, stacked
-% top to bottom) and an explanation text below them.
+% A4 page: title, the axes of srcFig (copied with their legends, in the same
+% row / column layout as in srcFig) and an explanation text below them.
 fig = newA4Page();
 annotation(fig, 'textbox', [0.08 0.89 0.84 0.05], 'String', titleText, ...
     'FontName', 'Arial', 'FontSize', 14, 'FontWeight', 'bold', 'EdgeColor', 'none', ...
     'Interpreter', 'none', 'VerticalAlignment', 'top');
 
 srcAx = findobj(srcFig, 'Type', 'axes');
-yPos = arrayfun(@(a) a.Position(2), srcAx);
-[~, order] = sort(yPos, 'descend');
-srcAx = srcAx(order);
+xPos = round(arrayfun(@(a) a.Position(1), srcAx), 2);
+yPos = round(arrayfun(@(a) a.Position(2), srcAx), 2);
+rowVals = unique(yPos, 'sorted');
+rowVals = flipud(rowVals(:));                 % top row first
+colVals = unique(xPos, 'sorted');
+nRows = numel(rowVals);
+nCols = numel(colVals);
 
-% Plot area: y = 0.33 ... 0.87 of the page, the text below it
-nAx = numel(srcAx);
-areaBottom = 0.34;
+% Plot area: up to y = 0.86 of the page; the text below it (less room for a short text)
+if numel(captionLines) <= 3
+    areaBottom = 0.17;
+    captionBox = [0.08 0.04 0.84 0.11];
+else
+    areaBottom = 0.34;
+    captionBox = [0.08 0.05 0.84 0.25];
+end
 areaTop = 0.86;
-slot = (areaTop - areaBottom) / nAx;
-for i = 1:nAx
+rowH = (areaTop - areaBottom) / nRows;
+colW = 0.84 / nCols;
+for i = 1:numel(srcAx)
     a = srcAx(i);
+    r = find(rowVals == yPos(i), 1);
+    c = find(colVals == xPos(i), 1);
     if ~isempty(a.Legend)
         copied = copyobj([a.Legend, a], fig);
     else
@@ -1153,7 +872,7 @@ for i = 1:nAx
     end
     newAx = findobj(copied, 'Type', 'axes');
     newAx.Units = 'normalized';
-    newAx.Position = [0.13, areaTop - i * slot + 0.05, 0.80, slot - 0.08];
+    newAx.Position = [0.08 + (c - 1) * colW + 0.06, areaTop - r * rowH + 0.05, colW - 0.08, rowH - 0.08];
     newAx.FontSize = 8;
     newAx.Title.FontSize = 9;
     if squareAxes
@@ -1161,7 +880,7 @@ for i = 1:nAx
     end
 end
 
-annotation(fig, 'textbox', [0.08 0.05 0.84 0.25], 'String', captionLines, ...
+annotation(fig, 'textbox', captionBox, 'String', captionLines, ...
     'FontName', 'Arial', 'FontSize', 9.5, 'EdgeColor', 'none', ...
     'Interpreter', 'none', 'VerticalAlignment', 'top', 'FitBoxToText', 'off');
 end
