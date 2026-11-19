@@ -15,9 +15,12 @@
 %      izleyen "Zernike n" sütunları o TEZI'nin MC katsayılarıdır. Yüzey
 %      numarası, Min ve Max başlık bilgi satırlarından ("Surf: 4") okunur.
 %      Satırların çoğu sayı olanlar MC veri satırıdır (MC_1, MC_2, ...).
-%   3. İsteğe bağlı olarak ölçüm Excel'i ve sayfası seçilir (IRR_Olcum_Oku.m).
-%      Excel'de "SURFACE (ZEMAX)" sütunu varsa her yüzeyin MC dağılımı yalnızca
-%      o yüzeyin ölçümleriyle karşılaştırılır; yoksa tüm ölçümlerle.
+%   3. Ölçüm Excel'i ve sayfası seçilir (IRR_Olcum_Oku.m). Değerler nm
+%      cinsindendir. Her yüzeyin MC dağılımı yalnızca "SURFACE (ZEMAX)"
+%      sütununda aynı numarayı taşıyan ölçümlerle karşılaştırılır. Excel'de
+%      olmayan yüzeyler analize alınmaz.
+%   4. Her yüzey için şekil, tüm yüzeyler için birleştirilmiş şekil, Excel ve
+%      .mat çıktısı üretilir.
 %
 % YÜZEY NUMARALARI
 %   .txt'deki "Surf:" numaraları Tolerance Data Editor'daki numaralardır, yani
@@ -25,11 +28,14 @@
 %   kırılmaları eklendiği için numaralar kayar, ama .txt bundan etkilenmez.
 %   Bu yüzden MC dosyalarını tek tek açmaya gerek yoktur; Excel'deki yüzey
 %   numarası nominal dosyadaki numara olmalıdır.
-%   4. Her yüzey için şekil, tüm yüzeyler için birleştirilmiş şekil, Excel ve
-%      .mat çıktısı üretilir.
 %
-% HESAPLAR  (1 fringe = lambda/2 yüzey yüksekliği, lambda = lambda_nm)
-%   TEZI (Zernike Standard, Noll sırası, katsayılar lens biriminde):
+% BİRİMLER  (her şey fringe'e çevrilir; 1 fringe = lambda/2 = 316,5 nm, lambda = 633 nm)
+%   Excel (IRR P-V, IRR RMS, ASTI) : nm   -> / (lambda_nm/2)
+%   TEZI ve Zernike katsayıları    : mm   -> / (lambda_nm*1e-6/2)
+%   TIRR                           : fringe (olduğu gibi)
+%
+% HESAPLAR
+%   TEZI (Zernike Standard, Noll sırası):
 %     W(rho,theta) = sum c_j Z_j      (excludeTerms hariç: piston, tilt, power)
 %     IRR P-V  = max(W) - min(W)      birim diskte gridSize örneklemle
 %     IRR RMS  = sqrt(sum c_j^2)      (Zernike Standard ortonormal)
@@ -43,8 +49,7 @@
 %   1 = hiç örtüşmüyor). Ölçümle en küçük D'yi veren seri en yakın modeldir.
 %
 % AYARLAR (User settings)
-%   lambda_nm, lensUnit_mm, excludeTerms, gridSize, nBins,
-%   useMeasurement, measUnit, measSheet
+%   lambda_nm, excludeTerms, gridSize, nBins, measSheet
 %
 % ÇIKTILAR (ilk .txt dosyasının yanında "MC IRR DAĞILIMI" klasörüne)
 %   IRR_S<yüzey>.png        : yüzey başına; IRR P-V yoğunluk ve CDF, TEZI varsa
@@ -61,14 +66,11 @@ clear;
 close all;
 
 %% User settings
-lambda_nm      = 632.8;      % Zemax test wavelength (nm); 1 fringe = lambda/2 of surface
-lensUnit_mm    = 1;          % lens unit of the Zernike coefficients in mm (1 = mm, 25.4 = inch)
-excludeTerms   = 1:4;        % Zernike terms not counted as irregularity (piston, tilt, power)
-gridSize       = [101 360];  % radial x angular samples on the unit disk for P-V
-nBins          = 25;         % histogram bins
-useMeasurement = true;       % ask for the measurement Excel for comparison
-measUnit       = 'nm';       % block read in the measurement Excel ('nm' or 'fr')
-measSheet      = '';         % '' = choose in a dialog, e.g. 'Silikon'
+lambda_nm    = 633;          % test wavelength (nm); 1 fringe = lambda/2 of surface
+excludeTerms = 1:4;          % Zernike terms not counted as irregularity (piston, tilt, power)
+gridSize     = [101 360];    % radial x angular samples on the unit disk for P-V
+nBins        = 25;           % histogram bins
+measSheet    = '';           % measurement sheet, '' = choose in a dialog (e.g. 'Sheet1')
 
 %% Select result files
 [fNames, fPath] = uigetfile({'*.txt', 'Zemax tolerance results (*.txt)'}, ...
@@ -79,7 +81,7 @@ if isequal(fNames, 0)
 end
 
 fNames = cellstr(fNames);
-frLU = lambda_nm * 1e-6 / 2 / lensUnit_mm;   % one fringe in lens units
+frMM = lambda_nm * 1e-6 / 2;   % one fringe in mm (TEZI / Zernike coefficients are in mm)
 
 %% Read and evaluate
 series = struct('run', {}, 'op', {}, 'surf', {}, 'label', {}, 'mc', {}, 'value', {}, ...
@@ -101,7 +103,7 @@ for f = 1:numel(fNames)
             case 'TEZI'
                 use = ~ismember(op.zNum, excludeTerms);
                 if any(use)
-                    Cfr = R.data(:, op.zCol(use)) / frLU;
+                    Cfr = R.data(:, op.zCol(use)) / frMM;
                     [pv, rms, asti] = zernikeIrr(op.zNum(use), Cfr, gridSize);
 
                     % Check: RSS of all saved coefficients vs the TEZI value
@@ -113,7 +115,7 @@ for f = 1:numel(fNames)
                 else
                     warning('TEZI on surface %d: no Zernike coefficient columns found, RMS from TEZI value only.', op.surf);
                     pv = NaN(nMC, 1);
-                    rms = abs(val) / frLU;
+                    rms = abs(val) / frMM;
                 end
             case 'TIRR'
                 pv = abs(val);
@@ -131,45 +133,55 @@ if isempty(series)
     error('No TEZI or TIRR data found in the selected files.');
 end
 
-%% Measurement (optional)
-meas = [];
+%% Measurement (nm)
+[mName, mPath] = uigetfile({'*.xlsx;*.xlsm;*.xls', 'Excel files'}, 'Select measurement Excel', fPath);
 
-if useMeasurement
-    [mName, mPath] = uigetfile({'*.xlsx;*.xlsm;*.xls', 'Excel files'}, ...
-        'Select measurement Excel (Cancel = no comparison)', fPath);
+if isequal(mName, 0)
+    return;
+end
 
-    if ~isequal(mName, 0)
-        mFile = fullfile(mPath, mName);
-        sh = measSheet;
-        if isempty(sh)
-            sheets = cellstr(sheetnames(mFile));
-            [sel, ok] = listdlg('ListString', sheets, 'SelectionMode', 'single', ...
-                'PromptString', 'Select measurement sheet:', 'ListSize', [300 150]);
-            if ok
-                sh = sheets{sel};
-            end
-        end
+mFile = fullfile(mPath, mName);
+sh = measSheet;
 
-        if ~isempty(sh)
-            [M, mInfo] = IRR_Olcum_Oku(mFile, sh, measUnit, lambda_nm);
-            meas = struct('label', sprintf('Measured - %s', sh), 'file', mFile, 'sheet', sh, ...
-                'table', M, 'pv', M.IRR_PV_fr, 'rms', M.IRR_RMS_fr, 'asti', M.ASTI_fr, ...
-                'astiRatio', M.ASTI_fr ./ M.IRR_PV_fr, 'pvRms', M.IRR_PV_fr ./ M.IRR_RMS_fr, ...
-                'surf', M.Surface);
-            fprintf('Measurement: %s, sheet %s, n = %d (%s)\n', mName, sh, height(M), mInfo.columns);
-            if any(isfinite(M.Surface))
-                us = unique(M.Surface(isfinite(M.Surface)))';
-                fprintf('Measured surfaces: %s\n', strjoin(arrayfun(@(u) sprintf('S%d (n = %d)', u, ...
-                    sum(M.Surface == u)), us, 'UniformOutput', false), ', '));
-                missing = setdiff(us, [series.surf]);
-                if ~isempty(missing)
-                    warning('Measured surface(s) %s have no TEZI/TIRR column in the MC results.', mat2str(missing));
-                end
-            else
-                warning('No "SURFACE" column in the measurement sheet: every surface is compared with all measurements.');
-            end
-        end
+if isempty(sh)
+    sheets = cellstr(sheetnames(mFile));
+    [sel, ok] = listdlg('ListString', sheets, 'SelectionMode', 'single', ...
+        'PromptString', 'Select measurement sheet:', 'ListSize', [300 150]);
+    if ~ok
+        return;
     end
+    sh = sheets{sel};
+end
+
+[M, mInfo] = IRR_Olcum_Oku(mFile, sh, 'nm', lambda_nm);
+meas = struct('label', sprintf('Measured - %s', sh), 'file', mFile, 'sheet', sh, ...
+    'table', M, 'pv', M.IRR_PV_fr, 'rms', M.IRR_RMS_fr, 'asti', M.ASTI_fr, ...
+    'astiRatio', M.ASTI_fr ./ M.IRR_PV_fr, 'pvRms', M.IRR_PV_fr ./ M.IRR_RMS_fr, ...
+    'surf', M.Surface);
+fprintf('Measurement: %s, sheet %s, n = %d (%s)\n', mName, sh, height(M), mInfo.columns);
+
+%% Keep only the surfaces given in the Excel
+if any(isfinite(M.Surface))
+    us = unique(M.Surface(isfinite(M.Surface)))';
+    fprintf('Measured surfaces: %s\n', strjoin(arrayfun(@(u) sprintf('S%d (n = %d)', u, ...
+        sum(M.Surface == u)), us, 'UniformOutput', false), ', '));
+
+    skipped = setdiff(unique([series.surf]), us);
+    if ~isempty(skipped)
+        fprintf('Not in the Excel, skipped: %s\n', strjoin(arrayfun(@(u) sprintf('S%d', u), skipped, ...
+            'UniformOutput', false), ', '));
+    end
+    missing = setdiff(us, [series.surf]);
+    if ~isempty(missing)
+        warning('Measured surface(s) %s have no TEZI/TIRR column in the MC results.', mat2str(missing));
+    end
+
+    series = series(ismember([series.surf], us));
+    if isempty(series)
+        error('None of the measured surfaces has a TEZI/TIRR column in the MC results.');
+    end
+else
+    warning('No "SURFACE" column in the measurement sheet: every surface is compared with all measurements.');
 end
 
 %% Groups: each surface, then all surfaces pooled per series
@@ -284,9 +296,9 @@ if ~isempty(meas)
     measText = sprintf('%s | %s', meas.file, meas.sheet);
 end
 Settings = table( ...
-    {'Result files'; 'Test wavelength (nm)'; 'Fringe (nm)'; 'Lens unit (mm)'; 'Excluded Zernike terms'; ...
+    {'Result files'; 'Test wavelength (nm)'; 'Fringe (nm)'; 'Units'; 'Excluded Zernike terms'; ...
      'P-V grid (radial x angular)'; 'Measurement'}, ...
-    {strjoin(fNames, ', '); num2str(lambda_nm); num2str(lambda_nm / 2); num2str(lensUnit_mm); ...
+    {strjoin(fNames, ', '); num2str(lambda_nm); num2str(lambda_nm / 2); 'Excel nm, TEZI mm, TIRR fringe -> fringe'; ...
      mat2str(excludeTerms); mat2str(gridSize); measText}, ...
     'VariableNames', {'Setting', 'Value'});
 writetable(Settings, outputFile, 'Sheet', 'Settings');

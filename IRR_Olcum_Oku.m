@@ -5,7 +5,7 @@ function [M, info] = IRR_Olcum_Oku(file, sheet, unit, lambda_nm)
 %
 %   unit       'nm' (varsayılan): "[birimler nm]" bloğu okunur ve fringe'e çevrilir
 %              'fr'             : "[birimler fr]" bloğu doğrudan okunur
-%   lambda_nm  test dalga boyu (varsayılan 632.8), 1 fringe = lambda/2
+%   lambda_nm  test dalga boyu (varsayılan 633), 1 fringe = lambda/2
 %
 %   M     tablo: LensNo, Surface, IRR_PV_fr, IRR_RMS_fr, ASTI_fr
 %         IRR P-V > 0 olan her ölçüm bir satır; sayfada olmayan sütunlar NaN.
@@ -13,8 +13,8 @@ function [M, info] = IRR_Olcum_Oku(file, sheet, unit, lambda_nm)
 %
 %   Sütunlar başlıklarından bulunur ("IRR P-V", "IRR RMS", "ASTI"). Aynı başlık
 %   hem nm hem fr bloğunda varsa, üstteki blok başlığına ("... [birimler nm]")
-%   bakılarak istenen blok seçilir; blok başlığı yoksa birim değerlerden
-%   tahmin edilir (medyan > 10 ise nm). "Lens no" ve "SURFACE (ZEMAX)"
+%   bakılarak istenen blok seçilir; blok başlığı yoksa değerler unit
+%   biriminde kabul edilir. "Lens no" ve "SURFACE (ZEMAX)"
 %   sütunlarındaki birleştirilmiş hücreler aşağı doğru doldurulur
 %   (sütun yoksa LensNo = "", Surface = NaN).
 
@@ -22,7 +22,7 @@ function [M, info] = IRR_Olcum_Oku(file, sheet, unit, lambda_nm)
         unit = 'nm';
     end
     if nargin < 4 || isempty(lambda_nm)
-        lambda_nm = 632.8;
+        lambda_nm = 633;
     end
 
     C = readcell(file, 'Sheet', sheet);
@@ -48,13 +48,7 @@ function [M, info] = IRR_Olcum_Oku(file, sheet, unit, lambda_nm)
     keep = isfinite(pv) & pv > 0;
 
     if isempty(colUnit)
-        if median(pv(keep)) > 10
-            colUnit = 'nm';
-        else
-            colUnit = 'fr';
-        end
-        warning('Sheet %s: unit of column %s not found in the block title, assumed "%s".', ...
-            sheet, colLetter(cPV), colUnit);
+        colUnit = unit;   % no "[birimler ...]" title: the requested unit is used
     end
 
     scale = 1;
