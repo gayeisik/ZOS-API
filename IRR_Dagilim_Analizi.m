@@ -8,7 +8,8 @@
 %
 % NASIL ÇALIŞIR
 %   1. Excel dosyası ve sayfa(lar) seçilir.
-%   2. Her sayfada irrHeader ("IRR P-V") başlıklı sütun bulunur. Sayfada aynı
+%   2. Her sayfada irrHeader ("IRR P-V", "IRR RMS" veya "ASTI") başlıklı sütun
+%      IRR_Olcum_Oku.m ile bulunur. Sayfada aynı
 %      başlık iki blokta varsa ("[birimler nm]" ve "[birimler fr]"), sourceUnit
 %      ile seçilen bloktaki sütun kullanılır. Başlığın altındaki tüm sayısal
 %      hücreler veri kabul edilir (sıfır ve boş hücreler atlanır). "Lens no"
@@ -57,7 +58,7 @@ close all;
 
 %% User settings
 lambda_nm   = 632.8;      % interferometer test wavelength (nm); 1 fringe = lambda/2 of surface
-irrHeader   = 'IRR P-V';  % header of the column to fit
+irrHeader   = 'IRR P-V';  % column to fit: 'IRR P-V', 'IRR RMS' or 'ASTI'
 sourceUnit  = 'nm';       % 'nm': use the "[birimler nm]" block and convert; 'fr': use the fringe block
 sheetNames  = {};         % {} = choose in a dialog, e.g. {'Silikon'}
 models      = {'Lognormal', 'Gamma', 'Weibull'};
@@ -99,7 +100,20 @@ allFits = struct('sheet', {}, 'fits', {});
 
 for s = 1:numel(sheetNames)
     sheet = sheetNames{s};
-    [x, lensNo, info] = readIrrColumn(excelFile, sheet, irrHeader, sourceUnit, lambda_nm);
+    [M, info] = IRR_Olcum_Oku(excelFile, sheet, sourceUnit, lambda_nm);
+    switch upper(regexprep(irrHeader, '[\s\-_]', ''))
+        case 'IRRPV'
+            x = M.IRR_PV_fr;
+        case 'IRRRMS'
+            x = M.IRR_RMS_fr;
+        case 'ASTI'
+            x = M.ASTI_fr;
+        otherwise
+            error('irrHeader must be ''IRR P-V'', ''IRR RMS'' or ''ASTI''.');
+    end
+    keep = isfinite(x) & x > 0;
+    x = x(keep);
+    lensNo = M.LensNo(keep);
 
     if numel(x) < 5
         warning('Sheet %s: only %d values found, skipped.', sheet, numel(x));
@@ -114,7 +128,7 @@ for s = 1:numel(sheetNames)
     q = [0.5 0.9 0.95 0.99];
     xq = arrayfun(@(qq) modelInv(best.name, best.p, qq, max(x)), q);
 
-    fprintf('\n===== %s  (%s, column %s, unit %s, n = %d) =====\n', sheet, irrHeader, info.column, info.unit, numel(x));
+    fprintf('\n===== %s  (%s, unit %s, n = %d) =====\n%s\n', sheet, irrHeader, info.unit, numel(x), info.columns);
     fprintf('Measured  : mean %.3f  median %.3f  std %.3f  min %.3f  max %.3f fr\n', ...
         mean(x), median(x), std(x), min(x), max(x));
     for m = 1:numel(fits)
@@ -184,118 +198,6 @@ save(fullfile(outFolder, 'IRR_Dagilim_Modeller.mat'), 'irrModel', 'allFits', 'ex
 fprintf('\nResults saved to: %s\n', outFolder);
 
 %% Local functions
-function [x, lensNo, info] = readIrrColumn(file, sheet, header, unit, lambda_nm)
-    C = readcell(file, 'Sheet', sheet);
-    raw = cellfun(@cellText, C, 'UniformOutput', false);
-    key = cellfun(@normKey, raw, 'UniformOutput', false);
-
-    [rr, cc] = find(strcmp(key, normKey(header)));
-    if isempty(rr)
-        error('Header "%s" not found on sheet %s.', header, sheet);
-    end
-
-    % Pick the occurrence whose block title has the wanted unit
-    units = arrayfun(@(k) blockUnit(raw, rr(k), cc(k)), 1:numel(rr), 'UniformOutput', false);
-    pick = find(strcmp(units, unit), 1);
-    if isempty(pick)
-        pick = 1;   % no unit titles: first occurrence, unit decided from the values
-    end
-    r0 = rr(pick);
-    c0 = cc(pick);
-
-    vals = cellfun(@cellNumber, C(r0+1:end, c0));
-    keep = isfinite(vals) & vals > 0;
-
-    colUnit = units{pick};
-    if isempty(colUnit)
-        if median(vals(keep)) > 10
-            colUnit = 'nm';
-        else
-            colUnit = 'fr';
-        end
-        warning('Sheet %s: unit of column %s not found in the block title, assumed "%s".', ...
-            sheet, colLetter(c0), colUnit);
-    end
-
-    if strcmp(colUnit, 'nm')
-        x = vals(keep) / (lambda_nm / 2);
-    else
-        x = vals(keep);
-    end
-    x = x(:);
-
-    % Lens number (merged cells -> forward fill)
-    lensNo = strings(numel(vals), 1);
-    lc = find(strcmp(key(r0, :), 'LENSNO'), 1);
-    if ~isempty(lc)
-        last = "";
-        for i = 1:numel(vals)
-            t = C{r0 + i, lc};
-            if isnumeric(t) && isscalar(t) && isfinite(t)
-                last = string(t);
-            elseif ischar(t) || isstring(t)
-                last = string(t);
-            end
-            lensNo(i) = last;
-        end
-    end
-    lensNo = lensNo(keep);
-
-    info.column = sprintf('%s (row %d)', colLetter(c0), r0);
-    info.unit = colUnit;
-end
-
-function t = cellText(v)
-    if ischar(v) || (isstring(v) && isscalar(v) && ~ismissing(v))
-        t = lower(char(v));
-    else
-        t = '';
-    end
-end
-
-function k = normKey(t)
-    k = upper(t);
-    k = strrep(k, char(304), 'I');            % 'İ'
-    k = regexprep(k, '[\s\-_\.]', '');
-end
-
-function v = cellNumber(c)
-    if isnumeric(c) && isscalar(c)
-        v = double(c);
-    elseif ischar(c) || (isstring(c) && isscalar(c) && ~ismissing(c))
-        v = str2double(strrep(char(c), ',', '.'));
-    else
-        v = NaN;
-    end
-end
-
-function u = blockUnit(raw, r, c)
-    % First text found to the left on the rows above, e.g. "silikon [birimler nm]"
-    u = '';
-    for rr = r-1:-1:1
-        for cc = c:-1:1
-            t = raw{rr, cc};
-            if ~isempty(t)
-                tok = regexp(t, '\<(nm|fr)\>', 'tokens', 'once');
-                if ~isempty(tok)
-                    u = tok{1};
-                    return;
-                end
-                break;   % text without a unit: try the row above
-            end
-        end
-    end
-end
-
-function s = colLetter(c)
-    s = '';
-    while c > 0
-        m = mod(c - 1, 26);
-        s = [char(65 + m) s]; %#ok<AGROW>
-        c = floor((c - 1) / 26);
-    end
-end
-
 function fits = fitModels(x, models)
     x = x(:);
     n = numel(x);
