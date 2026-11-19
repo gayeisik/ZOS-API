@@ -16,6 +16,15 @@
 %      numarası, Min ve Max başlık bilgi satırlarından ("Surf: 4") okunur.
 %      Satırların çoğu sayı olanlar MC veri satırıdır (MC_1, MC_2, ...).
 %   3. İsteğe bağlı olarak ölçüm Excel'i ve sayfası seçilir (IRR_Olcum_Oku.m).
+%      Excel'de "SURFACE (ZEMAX)" sütunu varsa her yüzeyin MC dağılımı yalnızca
+%      o yüzeyin ölçümleriyle karşılaştırılır; yoksa tüm ölçümlerle.
+%
+% YÜZEY NUMARALARI
+%   .txt'deki "Surf:" numaraları Tolerance Data Editor'daki numaralardır, yani
+%   NOMİNAL dosyanın yüzey numaralarıdır. MC_T*.zmx dosyalarında koordinat
+%   kırılmaları eklendiği için numaralar kayar, ama .txt bundan etkilenmez.
+%   Bu yüzden MC dosyalarını tek tek açmaya gerek yoktur; Excel'deki yüzey
+%   numarası nominal dosyadaki numara olmalıdır.
 %   4. Her yüzey için şekil, tüm yüzeyler için birleştirilmiş şekil, Excel ve
 %      .mat çıktısı üretilir.
 %
@@ -145,19 +154,31 @@ if useMeasurement
             [M, mInfo] = IRR_Olcum_Oku(mFile, sh, measUnit, lambda_nm);
             meas = struct('label', sprintf('Measured - %s', sh), 'file', mFile, 'sheet', sh, ...
                 'table', M, 'pv', M.IRR_PV_fr, 'rms', M.IRR_RMS_fr, 'asti', M.ASTI_fr, ...
-                'astiRatio', M.ASTI_fr ./ M.IRR_PV_fr, 'pvRms', M.IRR_PV_fr ./ M.IRR_RMS_fr);
+                'astiRatio', M.ASTI_fr ./ M.IRR_PV_fr, 'pvRms', M.IRR_PV_fr ./ M.IRR_RMS_fr, ...
+                'surf', M.Surface);
             fprintf('Measurement: %s, sheet %s, n = %d (%s)\n', mName, sh, height(M), mInfo.columns);
+            if any(isfinite(M.Surface))
+                us = unique(M.Surface(isfinite(M.Surface)))';
+                fprintf('Measured surfaces: %s\n', strjoin(arrayfun(@(u) sprintf('S%d (n = %d)', u, ...
+                    sum(M.Surface == u)), us, 'UniformOutput', false), ', '));
+                missing = setdiff(us, [series.surf]);
+                if ~isempty(missing)
+                    warning('Measured surface(s) %s have no TEZI/TIRR column in the MC results.', mat2str(missing));
+                end
+            else
+                warning('No "SURFACE" column in the measurement sheet: every surface is compared with all measurements.');
+            end
         end
     end
 end
 
 %% Groups: each surface, then all surfaces pooled per series
 surfList = unique([series.surf]);
-groups = struct('name', {}, 'file', {}, 'items', {});
+groups = struct('name', {}, 'file', {}, 'items', {}, 'surfs', {});
 
 for s = surfList
     groups(end+1) = struct('name', sprintf('Surface %d', s), 'file', sprintf('IRR_S%d.png', s), ...
-        'items', series([series.surf] == s)); %#ok<SAGROW>
+        'items', series([series.surf] == s), 'surfs', s); %#ok<SAGROW>
 end
 
 [keys, ~, kIdx] = unique({series.label}, 'stable');
@@ -172,7 +193,7 @@ for k = 1:numel(keys)
     p.label = sprintf('%s (%d surfaces)', p.label, numel(sk));
     pooled(end+1) = p; %#ok<SAGROW>
 end
-groups(end+1) = struct('name', 'All surfaces', 'file', 'IRR_Tum_Yuzeyler.png', 'items', pooled);
+groups(end+1) = struct('name', 'All surfaces', 'file', 'IRR_Tum_Yuzeyler.png', 'items', pooled, 'surfs', surfList);
 
 %% Statistics, command window summary, plots
 outFolder = fullfile(fPath, ['MC IRR DA' char(286) 'ILIMI']);   % "MC IRR DAĞILIMI"
@@ -185,25 +206,26 @@ statRows = {};
 
 for g = 1:numel(groups)
     items = groups(g).items;
+    gm = measFor(meas, groups(g).surfs);   % measurements of this group's surface(s)
 
     fprintf('\n===== %s : IRR P-V [fr] =====\n', groups(g).name);
-    if ~isempty(meas)
-        q = pct(meas.pv, [0.5 0.95]);
-        fprintf('%-40s n %4d  mean %.3f  median %.3f  P95 %.3f  max %.3f\n', meas.label, ...
-            sum(isfinite(meas.pv)), mean(meas.pv, 'omitnan'), q(1), q(2), max(meas.pv));
+    if ~isempty(gm)
+        q = pct(gm.pv, [0.5 0.95]);
+        fprintf('%-40s n %4d  mean %.3f  median %.3f  P95 %.3f  max %.3f\n', gm.label, ...
+            sum(isfinite(gm.pv)), mean(gm.pv, 'omitnan'), q(1), q(2), max(gm.pv));
     end
 
     D = NaN(numel(items), 1);
     for i = 1:numel(items)
         v = items(i).pv;
         q = pct(v, [0.5 0.95]);
-        if ~isempty(meas)
-            D(i) = ks2(v, meas.pv);
+        if ~isempty(gm)
+            D(i) = ks2(v, gm.pv);
         end
         fprintf('%-40s n %4d  mean %.3f  median %.3f  P95 %.3f  max %.3f  KS D %.3f\n', items(i).label, ...
             sum(isfinite(v)), mean(v, 'omitnan'), q(1), q(2), max(v), D(i));
     end
-    if ~isempty(meas) && numel(items) > 1 && any(isfinite(D))
+    if ~isempty(gm) && numel(items) > 1 && any(isfinite(D))
         [~, iBest] = min(D);
         fprintf('Closest to measurement: %s\n', items(iBest).label);
     end
@@ -211,8 +233,8 @@ for g = 1:numel(groups)
     % Statistics rows
     for m = 1:size(metrics, 1)
         fld = metrics{m, 1};
-        if ~isempty(meas) && any(isfinite(meas.(fld)))
-            statRows(end+1, :) = statRow(groups(g).name, meas.label, '', 'Measured', metrics{m, 2}, meas.(fld), []); %#ok<SAGROW>
+        if ~isempty(gm) && any(isfinite(gm.(fld)))
+            statRows(end+1, :) = statRow(groups(g).name, gm.label, '', 'Measured', metrics{m, 2}, gm.(fld), []); %#ok<SAGROW>
         end
         for i = 1:numel(items)
             v = items(i).(fld);
@@ -220,15 +242,15 @@ for g = 1:numel(groups)
                 continue;
             end
             ref = [];
-            if ~isempty(meas)
-                ref = meas.(fld);
+            if ~isempty(gm)
+                ref = gm.(fld);
             end
             statRows(end+1, :) = statRow(groups(g).name, items(i).label, items(i).run, items(i).op, ...
                 metrics{m, 2}, v, ref); %#ok<SAGROW>
         end
     end
 
-    plotGroup(groups(g).name, items, meas, nBins, fullfile(outFolder, groups(g).file));
+    plotGroup(groups(g).name, items, gm, nBins, fullfile(outFolder, groups(g).file));
 end
 
 %% Save results
@@ -483,6 +505,25 @@ function [D, p] = ks2(a, b)
     lam = (sqrt(ne) + 0.12 + 0.11 / sqrt(ne)) * D;
     j = (1:100)';
     p = min(max(2 * sum((-1).^(j - 1) .* exp(-2 * j.^2 * lam^2)), 0), 1);
+end
+
+function m = measFor(meas, surfs)
+    % Measurement rows of the given surface(s); all rows if the sheet has no surface column
+    m = meas;
+    if isempty(meas) || ~any(isfinite(meas.surf))
+        return;
+    end
+    sel = ismember(meas.surf, surfs);
+    if ~any(sel)
+        m = [];
+        return;
+    end
+    for fld = {'pv', 'rms', 'asti', 'astiRatio', 'pvRms', 'surf'}
+        m.(fld{1}) = meas.(fld{1})(sel);
+    end
+    if isscalar(surfs)
+        m.label = sprintf('%s S%d', meas.label, surfs);
+    end
 end
 
 function row = statRow(group, label, run, op, metric, v, ref)

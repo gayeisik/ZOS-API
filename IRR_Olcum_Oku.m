@@ -7,14 +7,16 @@ function [M, info] = IRR_Olcum_Oku(file, sheet, unit, lambda_nm)
 %              'fr'             : "[birimler fr]" bloğu doğrudan okunur
 %   lambda_nm  test dalga boyu (varsayılan 632.8), 1 fringe = lambda/2
 %
-%   M     tablo: LensNo, IRR_PV_fr, IRR_RMS_fr, ASTI_fr
+%   M     tablo: LensNo, Surface, IRR_PV_fr, IRR_RMS_fr, ASTI_fr
 %         IRR P-V > 0 olan her ölçüm bir satır; sayfada olmayan sütunlar NaN.
 %   info  bulunan sütunlar, başlık satırı ve birim
 %
 %   Sütunlar başlıklarından bulunur ("IRR P-V", "IRR RMS", "ASTI"). Aynı başlık
 %   hem nm hem fr bloğunda varsa, üstteki blok başlığına ("... [birimler nm]")
-%   bakılarak istenen blok seçilir. "Lens no" sütunundaki birleştirilmiş
-%   hücreler aşağı doğru doldurulur.
+%   bakılarak istenen blok seçilir; blok başlığı yoksa birim değerlerden
+%   tahmin edilir (medyan > 10 ise nm). "Lens no" ve "SURFACE (ZEMAX)"
+%   sütunlarındaki birleştirilmiş hücreler aşağı doğru doldurulur
+%   (sütun yoksa LensNo = "", Surface = NaN).
 
     if nargin < 3 || isempty(unit)
         unit = 'nm';
@@ -74,8 +76,22 @@ function [M, info] = IRR_Olcum_Oku(file, sheet, unit, lambda_nm)
         end
     end
 
-    M = table(lensNo(keep), pv(keep) * scale, rms(keep) * scale, ast(keep) * scale, ...
-        'VariableNames', {'LensNo', 'IRR_PV_fr', 'IRR_RMS_fr', 'ASTI_fr'});
+    % Zemax surface number ("SURFACE (ZEMAX)", merged cells -> forward fill)
+    surfNo = NaN(numel(pv), 1);
+    sc = find(startsWith(key(r0, :), 'SURF'), 1);
+    if ~isempty(sc)
+        last = NaN;
+        for i = 1:numel(pv)
+            v = cellNumber(C{r0 + i, sc});
+            if isfinite(v)
+                last = v;
+            end
+            surfNo(i) = last;
+        end
+    end
+
+    M = table(lensNo(keep), surfNo(keep), pv(keep) * scale, rms(keep) * scale, ast(keep) * scale, ...
+        'VariableNames', {'LensNo', 'Surface', 'IRR_PV_fr', 'IRR_RMS_fr', 'ASTI_fr'});
 
     info.headerRow = r0;
     info.unit = colUnit;
